@@ -16,7 +16,7 @@ from mathutils import Vector
 # Human-readable add-on version. Bump this on every meaningful change so the
 # version shown in the sidebar and printed to the console proves Blender loaded
 # the latest file (Blender caches enabled add-ons aggressively).
-ADDON_VERSION = "0.4.0-seg-corners"
+ADDON_VERSION = "0.4.2-seg-corner-mitres"
 
 
 # Common BeMatrix frame dimensions from your chart.

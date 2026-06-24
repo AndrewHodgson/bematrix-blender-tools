@@ -180,9 +180,21 @@ across a corner).
   cell. `_seg_cells_for_frame` returns each cell's 4 world corners and outward
   normal.
 * **Frame depth / outside face.** `B62` = 62 mm deep, centered origin (front face
-  local Y `-31`, back `+31`). SEG sits 1 mm outside: front `-32`, back `+32`,
-  applied along each frame's **local Y**, then transformed by the frame's world
-  matrix — so rotated frames get the correct world-space face and normal.
+  local Y `-31`, back `+31`). SEG sits 1 mm outside: `±32` along local Y, then
+  transformed by the frame's world matrix.
+* **Understand the OUTSIDE of a box.** Do NOT use a fixed local-Y sign for all
+  frames. Compute the **group centroid** (mean of all cell centres) and, per
+  frame, pick the local-Y direction that points **away** from the centroid as the
+  outside face (`Front` = outside, `Back` = inside). If the frame's plane contains
+  the centroid (`|local_Y · (centroid - centre)|` below a small epsilon → a flat
+  coplanar wall), fall back to local `-Y` for Front / `+Y` for Back so flat walls
+  are unchanged. Winding follows the per-cell outward sign.
+* **Corner bridges.** Where two sections with sufficiently different normals
+  (a corner; skip near-parallel/anti-parallel pairs) have near-parallel boundary
+  edges within ~`frame_depth + 2·offset`, add a bridge quad connecting those
+  edges so the fabric spans the frame depth and there is no corner gap. Bridge
+  faces reuse existing section vertices; orient them outward (away from the
+  centroid).
 * **Group by plane.** Group cells by `_plane_key` (rounded unit normal + signed
   plane distance). Coplanar, touching cells weld within a tolerance (**10% of the
   smallest frame dimension**) into one connected section; a different plane

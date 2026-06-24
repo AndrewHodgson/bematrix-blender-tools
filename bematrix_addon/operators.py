@@ -219,8 +219,10 @@ class BEMATRIX_OT_AddGraphicPanels(bpy.types.Operator):
             verb = "created" if seg_info.get("created") else "updated"
             print(
                 f"  [{side_label}] {verb}: {obj.name} "
-                f"({seg_info['quad_count']} cell(s), "
+                f"({seg_info['quad_count']} face(s), "
                 f"{seg_info.get('section_count', 1)} section(s), "
+                f"{seg_info.get('mitre_count', seg_info.get('bridge_count', 0))} "
+                f"corner mitre(s), "
                 f"{seg_info['vert_count']} verts, "
                 f"material={seg_info.get('material')})"
             )

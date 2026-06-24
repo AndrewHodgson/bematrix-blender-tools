@@ -28,6 +28,7 @@ from .utils import (
     is_marked_panel,
     generated_seg_name,
     get_frame_size_mm,
+    get_frame_depth_mm,
     strip_blender_duplicate_suffix,
 )
 from .materials import get_or_create_unique_panel_material
@@ -44,63 +45,28 @@ SMART_SEG_NAME = "SEG_Fabric_Panel"
 SMART_SEG_KIND = "SEG_SMART"
 
 
-def _seg_cells_for_frame(frame_obj, side_label, side_offset_mm):
-    """
-    Build the SEG cell(s) for one frame, EXPANDING any supported Array modifiers
-    into instances (same array-position math as the graphic panels).
-
-    Returns (cells, (width_mm, height_mm)) where each cell is a dict with:
-        frame        source frame name
-        index_1/2    array indices (or None)
-        corners      4 world-space corners (BL, BR, TR, TL) of the outside face
-        normal       unit world-space outward face normal
-
-    The SEG face uses the FULL frame size (no trim) and sits at `side_offset_mm`
-    along the frame's LOCAL Y, transformed by each instance's world matrix so
-    rotation, position and depth are respected per frame.
-    """
-    size = get_frame_size_mm(frame_obj)
-    if not size:
-        return [], None
-
-    width_mm, height_mm = size
-    half_w = mm_to_m(width_mm) / 2.0
-    half_h = mm_to_m(height_mm) / 2.0
-    y = mm_to_m(side_offset_mm)
-
-    local_corners = (
+def _seg_cell_corners(half_w, half_h, y):
+    """Four local corners (BL, BR, TR, TL) of a SEG cell at depth offset y."""
+    return (
         Vector((-half_w, y, -half_h)),  # bottom-left
         Vector(( half_w, y, -half_h)),  # bottom-right
         Vector(( half_w, y,  half_h)),  # top-right
         Vector((-half_w, y,  half_h)),  # top-left
     )
-    # Outward normal: FRONT face -> local -Y, BACK face -> local +Y.
-    normal_local = (
-        Vector((0.0, -1.0, 0.0)) if side_label == "FRONT"
-        else Vector((0.0, 1.0, 0.0))
-    )
 
-    # Expand arrays into instance offsets (local). No array -> a single cell.
-    array_list = detect_all_array_settings(frame_obj, limit=2)
-    positions = get_panel_array_positions(frame_obj, array_list)
 
-    cells = []
-    for index_1, index_2, offset in positions:
-        cell_matrix = frame_obj.matrix_world @ Matrix.Translation(offset)
-        rotation = cell_matrix.to_3x3()
-        corners = [cell_matrix @ corner for corner in local_corners]
-        normal = rotation @ normal_local
-        if normal.length > 1e-9:
-            normal = normal.normalized()
-        cells.append({
-            "frame": frame_obj.name,
-            "index_1": index_1,
-            "index_2": index_2,
-            "corners": corners,
-            "normal": normal,
-        })
-
-    return cells, (width_mm, height_mm)
+def _section_boundary_edges(section_faces):
+    """
+    Outline edges of a section: edges used by exactly one face. Returned as
+    (vert_index_a, vert_index_b) tuples.
+    """
+    counts = {}
+    for face in section_faces:
+        n = len(face)
+        for k in range(n):
+            edge = frozenset((face[k], face[(k + 1) % n]))
+            counts[edge] = counts.get(edge, 0) + 1
+    return [tuple(edge) for edge, c in counts.items() if c == 1]
 
 
 def _plane_key(normal, point, normal_round=3, dist_round=3):
@@ -143,7 +109,8 @@ def create_smart_seg_panel(context, frames, side_label, side_offset_mm,
     Returns (object_or_None, info_dict).
     """
     info = {"quad_count": 0, "vert_count": 0, "skipped": 0,
-            "section_count": 0, "error": None}
+            "section_count": 0, "bridge_count": 0, "mitre_count": 0,
+            "error": None}
 
     if not frames:
         info["error"] = "no frames"
@@ -152,40 +119,88 @@ def create_smart_seg_panel(context, frames, side_label, side_offset_mm,
     active = context.view_layer.objects.active
     main_frame = active if (active is not None and active in frames) else frames[0]
     main_inv = main_frame.matrix_world.inverted()
+    offset_m = mm_to_m(abs(side_offset_mm))
 
-    print(f"\n  --- SMART SEG [{side_label}] (offset {side_offset_mm} mm) ---")
+    print(f"\n  --- SMART SEG [{side_label}] (offset +-{abs(side_offset_mm)} mm) ---")
     print(f"  Main frame: {main_frame.name}")
 
-    # Collect cells (array-expanded) for all frames + their world face data.
-    all_cells = []
+    # Pass 1: per-frame data + all cell centres for the group centroid.
+    frame_data = []      # (frame, (w_mm, h_mm), [(i1, i2, offset), ...])
+    centers = []
     frame_dims_m = []
+    depth_m_vals = []
     for frame_obj in frames:
-        cells, dims_mm = _seg_cells_for_frame(frame_obj, side_label, side_offset_mm)
-        if not cells:
+        size = get_frame_size_mm(frame_obj)
+        if not size:
             info["skipped"] += 1
             print(f"  Frame '{frame_obj.name}': no detectable size - skipped.")
             continue
-        frame_dims_m += [mm_to_m(dims_mm[0]), mm_to_m(dims_mm[1])]
-        mw = frame_obj.matrix_world
-        loc = mw.to_translation()
-        rot = mw.to_euler()
-        print(
-            f"  Frame '{frame_obj.name}': loc="
-            f"{tuple(round(v, 3) for v in loc)} rotXYZ_deg="
-            f"{tuple(round(math.degrees(a), 1) for a in rot)} "
-            f"cells(array-expanded)={len(cells)}"
-        )
-        for cell in cells:
-            print(
-                f"      cell A{cell['index_1']}/B{cell['index_2']} "
-                f"normal={tuple(round(v, 3) for v in cell['normal'])} "
-                f"corners={[tuple(round(v, 3) for v in c) for c in cell['corners']]}"
-            )
-        all_cells.extend(cells)
+        array_list = detect_all_array_settings(frame_obj, limit=2)
+        positions = get_panel_array_positions(frame_obj, array_list)
+        frame_data.append((frame_obj, size, positions))
+        frame_dims_m += [mm_to_m(size[0]), mm_to_m(size[1])]
+        depth_mm, _src = get_frame_depth_mm(frame_obj)
+        depth_m_vals.append(mm_to_m(depth_mm))
+        for _i1, _i2, offset in positions:
+            centers.append(frame_obj.matrix_world @ offset)
 
-    if not all_cells:
+    if not frame_data or not centers:
         info["error"] = "no valid frame cells"
         return None, info
+
+    centroid = Vector((0.0, 0.0, 0.0))
+    for c in centers:
+        centroid += c
+    centroid /= len(centers)
+    eps = 0.02 * min(frame_dims_m)
+    print(f"  Group centroid (world): {tuple(round(v, 3) for v in centroid)}")
+
+    # Pass 2: build cells, choosing the OUTSIDE face per frame from the centroid.
+    all_cells = []
+    for frame_obj, size, positions in frame_data:
+        width_mm, height_mm = size
+        half_w = mm_to_m(width_mm) / 2.0
+        half_h = mm_to_m(height_mm) / 2.0
+        rot = frame_obj.matrix_world.to_3x3()
+        y_world = rot @ Vector((0.0, 1.0, 0.0))
+        y_world = y_world.normalized() if y_world.length > 1e-9 else Vector((0.0, 1.0, 0.0))
+        eul = frame_obj.matrix_world.to_euler()
+        print(
+            f"  Frame '{frame_obj.name}': loc="
+            f"{tuple(round(v, 3) for v in frame_obj.matrix_world.to_translation())} "
+            f"rotXYZ_deg={tuple(round(math.degrees(a), 1) for a in eul)} "
+            f"cells={len(positions)}"
+        )
+        for index_1, index_2, offset in positions:
+            cell_matrix = frame_obj.matrix_world @ Matrix.Translation(offset)
+            center = cell_matrix.to_translation()
+            # Which local-Y direction points AWAY from the group centroid?
+            d = y_world.dot(centroid - center)
+            if d > eps:
+                outside_sign = -1.0   # +Y points toward centre -> outside is -Y
+            elif d < -eps:
+                outside_sign = 1.0
+            else:
+                outside_sign = -1.0   # coplanar / ambiguous -> default front = -Y
+            # Front = outside face, Back = inside face.
+            y_sign = -outside_sign if side_label == "BACK" else outside_sign
+            y = y_sign * offset_m
+
+            corners = [cell_matrix @ c for c in _seg_cell_corners(half_w, half_h, y)]
+            normal = rot @ Vector((0.0, y_sign, 0.0))
+            normal = normal.normalized() if normal.length > 1e-9 else normal
+            all_cells.append({
+                "frame": frame_obj.name,
+                "index_1": index_1,
+                "index_2": index_2,
+                "corners": corners,
+                "normal": normal,
+                "y_sign": y_sign,
+            })
+            print(
+                f"      cell A{index_1}/B{index_2} y_sign={int(y_sign)} "
+                f"normal={tuple(round(v, 3) for v in normal)}"
+            )
 
     weld_tol = max(1e-4, 0.1 * min(frame_dims_m))
 
@@ -196,32 +211,30 @@ def create_smart_seg_panel(context, frames, side_label, side_offset_mm,
         groups.setdefault(key, []).append(cell)
     print(f"  Coplanar sections: {len(groups)}")
 
-    verts = []        # main-frame-local positions
-    vert_uv = []      # one UV per vertex (no cross-section sharing)
+    verts = []             # main-frame-local positions
+    vert_uv = []           # one UV per vertex
     faces = []
+    section_faces = []     # face tuples per section (for boundary edges)
+    section_normals = []   # world normal per section
+    section_uv_axes = []    # world-space planar UV basis per section
     u_cursor = 0.0
     uv_gap = max(0.02, 0.05 * min(frame_dims_m))
 
     for section_i, (key, cells) in enumerate(groups.items(), start=1):
-        # 2D basis for this section's plane, recovered from the first cell's
-        # corners: edge BL->BR is U (frame width), BL->TL is V (frame height).
-        sample_normal, sample_dist = key
-        c = cells[0]["corners"]
-        u_axis = (c[1] - c[0])
-        v_axis = (c[3] - c[0])
+        c0 = cells[0]["corners"]
+        u_axis = c0[1] - c0[0]
+        v_axis = c0[3] - c0[0]
         u_axis = u_axis.normalized() if u_axis.length > 1e-9 else Vector((1.0, 0.0, 0.0))
         v_axis = v_axis.normalized() if v_axis.length > 1e-9 else Vector((0.0, 0.0, 1.0))
 
-        # Section UV origin = min projection over its corners.
         proj_u = [corner.dot(u_axis) for cell in cells for corner in cell["corners"]]
         proj_v = [corner.dot(v_axis) for cell in cells for corner in cell["corners"]]
         min_u, max_u = min(proj_u), max(proj_u)
         min_v = min(proj_v)
         section_width_u = max_u - min_u
 
-        # Weld within this section only (clean bends between sections).
-        sec_positions = []   # local positions for tolerance search
-        sec_indices = []     # parallel global vertex indices
+        sec_positions = []
+        sec_indices = []
 
         def section_weld(local_point, world_corner):
             for j, existing in enumerate(sec_positions):
@@ -237,27 +250,135 @@ def create_smart_seg_panel(context, frames, side_label, side_offset_mm,
             sec_indices.append(gi)
             return gi
 
+        this_section_faces = []
         for cell in cells:
-            idx = [
-                section_weld(main_inv @ corner, corner)
-                for corner in cell["corners"]
-            ]
-            # Winding for outward normal: FRONT -> local -Y, BACK reversed.
-            if side_label == "BACK":
-                faces.append((idx[0], idx[3], idx[2], idx[1]))
+            idx = [section_weld(main_inv @ corner, corner) for corner in cell["corners"]]
+            # Winding so the face normal follows the cell's outward y_sign.
+            if cell["y_sign"] > 0:
+                face = (idx[0], idx[3], idx[2], idx[1])
             else:
-                faces.append((idx[0], idx[1], idx[2], idx[3]))
+                face = (idx[0], idx[1], idx[2], idx[3])
+            faces.append(face)
+            this_section_faces.append(face)
 
+        section_faces.append(this_section_faces)
+        section_normals.append(cells[0]["normal"])
+        section_uv_axes.append((u_axis, v_axis))
         print(
-            f"    Section {section_i}: normal={sample_normal} dist={sample_dist} "
-            f"cells={len(cells)} frames="
-            f"{sorted({cell['frame'] for cell in cells})}"
+            f"    Section {section_i}: normal={key[0]} dist={key[1]} "
+            f"cells={len(cells)} frames={sorted({cell['frame'] for cell in cells})}"
         )
         u_cursor += section_width_u + uv_gap
 
     if not faces:
         info["error"] = "no valid frame cells"
         return None, info
+
+    # --- Corner mitres: extend perpendicular sections to their shared corner
+    # line so the fabric meets cleanly at the outer corner. This wraps the frame
+    # depth at 90 degrees instead of cutting a diagonal end-cap that clips the
+    # metal.
+    avg_depth = (sum(depth_m_vals) / len(depth_m_vals)) if depth_m_vals else mm_to_m(62.0)
+    corner_reach = avg_depth + 2.0 * offset_m + 0.05  # max corner gap to close
+    main_rot_inv = main_inv.to_3x3()
+
+    # Section normals + plane offsets in the mesh's local space.
+    sec_n_local = []
+    sec_d_local = []
+    for idx in range(len(section_faces)):
+        n_local = main_rot_inv @ section_normals[idx]
+        n_local = n_local.normalized() if n_local.length > 1e-9 else n_local
+        rep = verts[section_faces[idx][0][0]]
+        sec_n_local.append(n_local)
+        sec_d_local.append(n_local.dot(rep))
+
+    def _extend_section_to_plane(sec_idx, n_self, n_other, d_other, corner_dir):
+        """Slide the near boundary edges of a section onto another section's
+        plane (within its own plane), so the two faces reach the corner line."""
+        moved = 0
+        for e0, e1 in _section_boundary_edges(section_faces[sec_idx]):
+            p0, p1 = verts[e0], verts[e1]
+            edge = p1 - p0
+            if edge.length < 1e-9:
+                continue
+            edge_n = edge.normalized()
+            if abs(edge_n.dot(corner_dir)) < 0.9:
+                continue  # only edges running along the corner line
+            mid = (p0 + p1) / 2.0
+            if abs(n_other.dot(mid) - d_other) > corner_reach:
+                continue  # only the near side (close to the other plane)
+            perp = edge_n.cross(n_self)
+            if perp.length < 1e-9:
+                continue
+            perp = perp.normalized()
+            denom = n_other.dot(perp)
+            if abs(denom) < 1e-6:
+                continue  # cannot reach the other plane in-plane
+            for vi in (e0, e1):
+                s = (d_other - n_other.dot(verts[vi])) / denom
+                verts[vi] = verts[vi] + perp * s
+            moved += 1
+        return moved
+
+    corner_count = 0
+    for i in range(len(section_faces)):
+        for j in range(i + 1, len(section_faces)):
+            ni, nj = sec_n_local[i], sec_n_local[j]
+            if ni.length < 1e-9 or nj.length < 1e-9:
+                continue
+            if abs(ni.dot(nj)) > 0.866:
+                continue  # parallel / opposite walls: not a corner
+
+            corner_dir = ni.cross(nj)
+            if corner_dir.length < 1e-9:
+                continue
+            corner_dir = corner_dir.normalized()
+
+            # Confirm the two sections actually meet at a corner (their nearest
+            # boundary edges are within reach), not just share infinite planes.
+            best_gap = None
+            for a0, a1 in _section_boundary_edges(section_faces[i]):
+                ma = (verts[a0] + verts[a1]) / 2.0
+                for b0, b1 in _section_boundary_edges(section_faces[j]):
+                    mb = (verts[b0] + verts[b1]) / 2.0
+                    g = (ma - mb).length
+                    if best_gap is None or g < best_gap:
+                        best_gap = g
+            if best_gap is None or best_gap > corner_reach:
+                continue
+
+            m1 = _extend_section_to_plane(i, ni, nj, sec_d_local[j], corner_dir)
+            m2 = _extend_section_to_plane(j, nj, ni, sec_d_local[i], corner_dir)
+            corner_count += 1
+            print(
+                f"    Corner mitre: section {i + 1} <-> {j + 1} "
+                f"gap={round(best_gap, 4)} m edges_extended={m1 + m2}"
+            )
+
+    if corner_count:
+        print(f"  Corner mitres applied: {corner_count}")
+
+    # Vertices may have been moved by corner mitres. Recompute per-section UVs
+    # from the final geometry so the extended edge keeps real-world scale and
+    # does not inherit stale coordinates from the original exact-size cell.
+    u_cursor = 0.0
+    for sec_idx, faces_in_section in enumerate(section_faces):
+        section_vertex_indices = sorted({vi for face in faces_in_section for vi in face})
+        u_axis, v_axis = section_uv_axes[sec_idx]
+        world_points = {
+            vi: main_frame.matrix_world @ verts[vi]
+            for vi in section_vertex_indices
+        }
+        proj_u = [p.dot(u_axis) for p in world_points.values()]
+        proj_v = [p.dot(v_axis) for p in world_points.values()]
+        min_u, max_u = min(proj_u), max(proj_u)
+        min_v = min(proj_v)
+        for vi, world_point in world_points.items():
+            vert_uv[vi] = (
+                world_point.dot(u_axis) - min_u + u_cursor,
+                world_point.dot(v_axis) - min_v,
+            )
+        u_cursor += (max_u - min_u) + uv_gap
 
     clean_main = strip_blender_duplicate_suffix(main_frame.name)
     obj_name = f"{SMART_SEG_NAME}_{side_label}_{clean_main}"
@@ -318,18 +439,22 @@ def create_smart_seg_panel(context, frames, side_label, side_offset_mm,
     obj["bematrix_smart_seg"] = True
     obj["bematrix_seg_cell_count"] = len(faces)
     obj["bematrix_seg_section_count"] = len(groups)
+    obj["bematrix_seg_bridge_count"] = corner_count
+    obj["bematrix_seg_mitre_count"] = corner_count
     obj["bematrix_y_offset_mm"] = side_offset_mm
     obj["bematrix_parent_frame"] = main_frame.name
 
     dims = tuple(round(v, 4) for v in obj.dimensions)
     print(
-        f"  -> object '{obj.name}': cells={len(faces)} sections={len(groups)} "
-        f"verts={len(verts)} dims(local m)={dims}"
+        f"  -> object '{obj.name}': faces={len(faces)} sections={len(groups)} "
+        f"mitres={corner_count} verts={len(verts)} dims(local m)={dims}"
     )
 
     info["quad_count"] = len(faces)
     info["vert_count"] = len(verts)
     info["section_count"] = len(groups)
+    info["bridge_count"] = corner_count
+    info["mitre_count"] = corner_count
     info["object"] = obj.name
     info["material"] = seg_mat.name
     info["main_frame"] = main_frame.name

@@ -6,7 +6,7 @@ The first tool in this plugin is the **Graphic Panels** tool. It creates correct
 
 ## Current Status
 
-Version: `0.4.0-seg-corners`
+Version: `0.4.1-seg-outside-corners`
 Blender target: `5.1.0`
 Primary feature: Add/update graphic panel planes on BeMatrix frames.
 Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
@@ -37,7 +37,7 @@ Blender caches enabled add-ons, so an old copy can keep running after you edit
 the package. To confirm the latest code is active:
 
 1. The version label is shown at the top of **View3D > Sidebar > BeMatrix >
-   Graphic Panels** (e.g. `Version: 0.4.0-seg-corners`).
+   Graphic Panels** (e.g. `Version: 0.4.1-seg-outside-corners`).
 2. When you click **Add / Update Graphic Panels**, the System Console prints the
    add-on version and the full loaded file path (this path points at a module
    inside the installed `bematrix_addon/` package, e.g. `.../operators.py`).
@@ -520,19 +520,27 @@ per side** that follows those frames:
   the panels), so straight arrays/grids work too.
 * **Outside-face offset (frame depth aware).** `B62` frames are `62 mm` deep with
   a centered origin: the physical front face is at local Y `-31 mm` and the back
-  face at `+31 mm`. SEG sits **1 mm outside** the face to avoid clipping:
-  **front `-32 mm`, back `+32 mm`**, applied along each frame's **local Y**. When
-  frames are rotated, the front/back direction is each frame's local Y
-  transformed into world space.
+  face at `+31 mm`. SEG sits **1 mm outside** the face: `±32 mm` along local Y.
+* **Understands the outside of a box.** For each frame the side is chosen by the
+  **group centroid**: the SEG goes on the face pointing **away from the centre of
+  the selected frames**, so a box of frames gets fabric on the **outside**
+  (and the **inside** for the Back side / `Both Sides` makes both). For a flat
+  coplanar wall the centroid is in-plane, so it falls back to local `-Y` (Front) /
+  `+Y` (Back) exactly as before. The chosen direction is each frame's local Y in
+  world space, so rotated frames are handled.
 * **Plane grouping — bends at corners, no diagonal stretch.** Cells are grouped
   by their **face plane**. Coplanar, touching cells weld into **one connected
   planar section** (a straight wall or in-plane X/Z array/grid becomes one large
   flat section). A rotated frame or **90° corner** has a different face normal,
   so it becomes a **separate planar section in the same object** — the fabric
   *bends* at the corner instead of being stretched flat across it.
-* **One object, multiple sections.** All sections live in a single SEG mesh
-  object for easy selection and material assignment; only genuinely different
-  planes are split (no extra objects).
+* **Corner bridges (spans the frame depth).** Where two perpendicular sections
+  meet at a corner, a **bridge face** is added across the frame depth so there is
+  **no gap** between, e.g., a bottom run and a side run. Parallel/opposite walls
+  are not bridged.
+* **One object, multiple sections.** All sections and bridges live in a single
+  SEG mesh object for easy selection and material assignment; only genuinely
+  different planes are split (no extra objects).
 * **Empty grid spaces stay empty.** Only real cells get a quad (an L-shaped
   selection makes an L-shaped mesh, no missing-cell fill). Within a coplanar
   section, near-adjacent cells are welded within a tolerance (10% of the smallest
@@ -861,7 +869,11 @@ Test inside Blender after every meaningful change. Open the System Console
   missing cell, no gap at the junction.
 * [ ] **90° corner:** a straight run plus a frame rotated 90° next to it → one
   mesh with **2 planar sections** that **bend** at the corner (the face does
-  **not** stretch diagonally). Console shows `sections=2`.
+  **not** stretch diagonally), and a **corner bridge** closes the depth gap
+  (console shows `sections=2`, `bridges=1`, no gap at the corner).
+* [ ] **Box of frames (3+ faces):** every frame's SEG is on the **outside**
+  (none on the inside), and corners are bridged (no gaps). `Both Sides` adds the
+  inside fabric too. Console prints the group centroid and per-frame `y_sign`.
 * [ ] **Rotated whole group** → mesh follows the rotation; front faces sit 1 mm
   outside each frame's local-Y face (`-32`/`+32 mm`).
 * [ ] **Array still on the frame** → array instances are expanded into cells and
