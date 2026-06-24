@@ -1,6 +1,7 @@
 Backup/
 backup/
 bematrix_addon.zip
+dist/
 *.tmp.*
 __pycache__/
 *.pyc

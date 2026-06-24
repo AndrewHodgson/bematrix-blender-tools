@@ -26,6 +26,7 @@ class BEMATRIX_PT_GraphicPanelsPanel(bpy.types.Panel):
         # Add-on version, shown above all collapsible sections so it is always
         # visible regardless of which sections are expanded.
         layout.label(text=f"Version: {ADDON_VERSION}", icon="INFO")
+        layout.operator("bematrix.update_addon_from_zip", icon="FILE_REFRESH")
 
         # --- Graphic Panels (collapsible, open by default) ---
         gp_header, gp_body = layout.panel(
@@ -60,6 +61,60 @@ class BEMATRIX_PT_GraphicPanelsPanel(bpy.types.Panel):
             gp_body.prop(props, "replace_existing")
             gp_body.operator("bematrix.add_graphic_panels", icon="MESH_PLANE")
             gp_body.operator("bematrix.delete_generated_panels", icon="TRASH")
+
+        # --- Print Layout Export (selected generated planes only) ---
+        export_header, export_body = layout.panel(
+            "bematrix_print_layout_export_section", default_closed=False
+        )
+        export_header.label(text="Print Layout Export")
+        if export_body is not None:
+            groups_box = export_body.box()
+            groups_box.label(text="Print Groups")
+            groups_box.prop(props, "print_group_name")
+            groups_box.operator(
+                "bematrix.create_print_group_from_selected",
+                icon="ADD",
+            )
+            groups_box.prop(props, "active_print_group")
+            groups_box.operator(
+                "bematrix.select_print_group_objects",
+                icon="RESTRICT_SELECT_OFF",
+            )
+            groups_box.operator(
+                "bematrix.delete_print_group",
+                icon="TRASH",
+            )
+
+            export_box = export_body.box()
+            export_box.label(text="Export Options")
+            export_box.prop(props, "straight_wall_direction")
+            export_box.operator(
+                "bematrix.export_selected_planes_svg",
+                icon="EXPORT",
+            )
+            export_box.operator(
+                "bematrix.export_active_print_group_folder",
+                icon="EXPORT",
+            )
+            export_box.operator(
+                "bematrix.export_all_print_groups_folder",
+                icon="EXPORT",
+            )
+
+            validation_box = export_body.box()
+            validation_box.label(text="Validation Options")
+            validation_box.operator(
+                "bematrix.validate_active_print_group",
+                icon="CHECKMARK",
+            )
+            validation_box.operator(
+                "bematrix.validate_all_print_groups",
+                icon="CHECKMARK",
+            )
+            validation_box.separator()
+            validation_box.label(text="Latest Validation")
+            for line in props.print_group_validation_status.splitlines()[:5]:
+                validation_box.label(text=line)
 
         # --- Utilities (separate collapsible section) ---
         util_header, util_body = layout.panel(

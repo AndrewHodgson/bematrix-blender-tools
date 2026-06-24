@@ -6,7 +6,7 @@ The first tool in this plugin is the **Graphic Panels** tool. It creates correct
 
 ## Current Status
 
-Version: `0.4.1-seg-outside-corners`
+Version: `0.6.6-print-export-ui`
 Blender target: `5.1.0`
 Primary feature: Add/update graphic panel planes on BeMatrix frames.
 Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
@@ -23,6 +23,7 @@ Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
 | Front / back / both-side placement | ✅ Working |
 | Unique per-panel materials | ✅ Working |
 | Duplicate prevention / update-in-place | ✅ Working |
+| Print Layout Export: selected / grouped straight-wall SVG + validation | Phase 4 |
 | Utility: Convert Array to Individual Frames | ✅ Working |
 | **SEG fabric (Smart SEG)** | ✅ Working — one connected mesh across selected frames |
 | Frame Transform: vertex-to-vertex snap | ✅ Working |
@@ -37,14 +38,14 @@ Blender caches enabled add-ons, so an old copy can keep running after you edit
 the package. To confirm the latest code is active:
 
 1. The version label is shown at the top of **View3D > Sidebar > BeMatrix >
-   Graphic Panels** (e.g. `Version: 0.4.1-seg-outside-corners`).
+   Graphic Panels** (e.g. `Version: 0.6.6-print-export-ui`).
 2. When you click **Add / Update Graphic Panels**, the System Console prints the
    add-on version and the full loaded file path (this path points at a module
    inside the installed `bematrix_addon/` package, e.g. `.../operators.py`).
 
 If the version label or console version does not match the files you just edited,
-fully remove and reinstall the add-on (Edit > Preferences > Add-ons), then
-restart Blender.
+build a fresh ZIP and use **Update Add-on from ZIP** in the BeMatrix sidebar.
+Restart Blender if new panels, operators, or UI changes still do not appear.
 
 ### Modifier Debug Dump
 
@@ -74,6 +75,8 @@ The Graphic Panels tool can:
 * Use real-world millimeter dimensions converted to Blender meters.
 * Generate real `_A001`, `_A002`, etc. panel objects for frames with one simple Array modifier.
 * Generate a grid of `_A###_B###` panel objects for frames with two stacked Array modifiers.
+* Export selected generated hard-panel or SEG plane objects as a true-size SVG
+  layout for Illustrator (Phase 1: straight walls only).
 * Generate **Smart SEG Fabric**: one connected fabric mesh that follows only the selected frames (one quad per frame, shared edges, empty cells left empty, real-world UVs).
 
 ---
@@ -172,6 +175,39 @@ Later versions may add a true chart-based lookup for separate inside and outside
 This add-on is now a **multi-file package** in the `bematrix_addon/` folder. You
 must install the whole package, **not** a single `.py` file.
 
+### Build an install ZIP
+
+From the repo root, run:
+
+```bash
+python build_zip.py
+```
+
+The script reads the version from `bematrix_addon/__init__.py` when possible and
+creates a clean install ZIP in:
+
+```text
+dist/
+```
+
+Example output:
+
+```text
+dist/bematrix_blender_tools_v0.6.6.zip
+```
+
+The ZIP contains the correct top-level add-on folder:
+
+```text
+bematrix_addon/
+  __init__.py
+  utils.py
+  ...
+```
+
+It excludes development files such as `.git`, `__pycache__`, `.pytest_cache`,
+`.vscode`, `dist`, backup files, and temporary files.
+
 ### Recommended: install a zip of the package folder
 
 1. Zip the **`bematrix_addon` folder itself** so the archive is
@@ -209,6 +245,26 @@ must install the whole package, **not** a single `.py` file.
    ```text
    BeMatrix > Graphic Panels
    ```
+
+### Update an installed add-on from ZIP
+
+After the add-on is installed, use the sidebar update workflow instead of
+manually uninstalling and reinstalling:
+
+1. Run `python build_zip.py`.
+2. In Blender, open:
+
+   ```text
+   View3D > Sidebar > BeMatrix
+   ```
+
+3. Under the visible version number, click **Update Add-on from ZIP**.
+4. Choose the ZIP from `dist/`.
+
+The updater installs the selected ZIP over the existing add-on with overwrite
+enabled. Restart Blender after updating; Blender can invalidate the running
+operator when an enabled add-on overwrites itself, so the updater avoids
+in-session reloads.
 
 ### Alternative: copy the folder directly
 
@@ -581,6 +637,116 @@ Hard panels and SEG meshes are tracked independently (via a
 
 ---
 
+## Print Layout Export
+
+The **Print Layout Export** section provides SVG export for Illustrator. It can
+export the currently selected generated hard-panel or SEG plane objects, or a
+saved **Print Group**. It does **not** scan the whole scene.
+
+The panel is organized into **Print Groups**, **Export Options**, and
+**Validation Options** so creation/selection, export settings/actions, and
+preflight checks stay separate.
+
+Use it for straight-wall layouts only:
+
+1. Select the generated panel/SEG plane objects to export.
+2. Open **View3D Sidebar > BeMatrix > Print Layout Export**.
+3. Click **Export Selected Planes to SVG** and choose a `.svg` filepath.
+
+The SVG is true-size, uses inches as the document unit, and preserves the real
+world spacing/gaps between the selected planes based on their world-space mesh
+vertices. Each exported plane becomes an editable SVG rectangle with a text label
+showing the object name plus width and height in inches.
+
+### Straight Wall Direction
+
+The **Straight Wall Direction** setting controls which world axis becomes the
+left-to-right direction in the SVG:
+
+* **Auto Detect** — compares the group's world-space X and Y spread and uses the
+  larger spread as the wall direction. If the spread is ambiguous, it falls back
+  to World X and reports a warning.
+* **World X** — preserves spacing/gaps along World X and lays the wall out
+  horizontally in the SVG.
+* **World Y** — preserves spacing/gaps along World Y and lays the wall out
+  horizontally in the SVG.
+
+Phase 4 supports straight walls running along World X or World Y. Geometry is
+still read from world-space mesh vertices (`object.matrix_world @ vertex.co`) so
+parented generated planes remain exportable.
+
+### Print Groups
+
+Print Groups let you save selected generated plane objects as a named export set
+so you can export the same layout later without manually reselecting the panels.
+Group export is folder-based: the add-on creates the SVG filename from the Print
+Group name, for example `Back Wall` exports as `Back_Wall.svg`.
+
+To create and use a Print Group:
+
+1. Select the generated hard-panel or SEG plane objects.
+2. Enter a **Group Name**.
+3. Click **Create Print Group From Selected**.
+4. Choose that group in **Active Print Group**.
+5. Use **Select Group Objects** to reselect the saved planes.
+6. Click **Export Active Group to Folder** and choose an output folder.
+
+To export every saved group at once, click **Export All Groups to Folder** and
+choose an output folder. The add-on writes one SVG per valid Print Group:
+
+```text
+Back_Wall.svg
+Left_Wall.svg
+Right_Wall.svg
+Counter_Front.svg
+```
+
+Filenames are sanitized for Windows/macOS compatibility: spaces become
+underscores, invalid filename characters are replaced, and readable names are
+preserved where possible. Existing SVG files with the same generated name are
+overwritten.
+
+The add-on stores object names in scene data and also creates a matching
+`BM_PRINT_<Group Name>` collection for Outliner visibility. Objects are linked
+to that collection without being moved out of their existing collections. If a
+stored object was deleted, renamed, or is no longer a generated panel/SEG plane,
+the group export warns and skips it; if no valid planes remain, that group is
+skipped or cancelled with a clear report. Batch export reports how many groups
+exported successfully and how many failed or were skipped.
+
+Print Group SVGs include the Print Group name as a larger title above the panel
+layout. The title sits in the top margin and does not change the true-size panel
+geometry, dimensions, or real spacing.
+
+### Phase 3 / 4 Validation
+
+Before exporting production SVGs, use **Validate Active Group** or **Validate All
+Groups** in the Print Groups section. Validation checks the stored object
+references, confirms the objects still exist and are generated mesh planes, then
+uses the same world-space straight-wall compatibility and direction logic as SVG
+export.
+
+Validation reports whether each group is OK, has warnings, or has errors. A
+typical valid result looks like:
+
+```text
+Back Wall: OK - 3 planes, approx 118.11 in wide x 95.87 in high
+```
+
+Warnings and errors are shown in Blender's report area, printed to the System
+Console, and summarized in the sidebar under **Latest Validation**. Phase 3
+validation is only for same-axis straight-wall export groups. Phase 4 adds
+explicit World X / World Y direction handling, but does not make angled or
+L-shaped groups exportable.
+
+Phase 4 still intentionally does not include L-shape unfolding, angled wall unfolding,
+bleed, crop marks, safe lines, PDF export, Illustrator automation, artboard
+creation, or re-import/apply-art workflows. If the selected planes are not
+approximately coplanar, or if a selected generated mesh is not a rectangular
+straight-wall plane, the export is cancelled with a warning.
+
+---
+
 ## Utilities
 
 The sidebar panel has a generic **Utilities** section for tools that are not
@@ -803,7 +969,7 @@ bematrix-blender-tools/
     hard_panels.py           hard graphic panel placement
     seg_fabric.py            SEG fabric placement (partially working)
     properties.py            Scene PropertyGroup (UI state)
-    operators.py             Add/Update and Delete operators
+    operators.py             Add/Update, Delete, Export, and utility operators
     ui.py                    sidebar panel (View3D > BeMatrix)
 ```
 
@@ -898,6 +1064,29 @@ Test inside Blender after every meaningful change. Open the System Console
   Array modifier; each has its own mesh (edit one, others unaffected).
 * [ ] Generated frames carry `bematrix_array_broken_object`,
   `bematrix_source_frame_name`, `bematrix_array_index_1`, `bematrix_array_index_2`.
+
+**Print Layout Export (Phase 4):**
+
+* [ ] Select generated hard-panel objects from one straight wall and export SVG.
+* [ ] Open the SVG in Illustrator and confirm real-world inch dimensions.
+* [ ] Confirm gaps between selected panels match the Blender scene spacing.
+* [ ] Confirm each plane is an editable SVG rectangle with a text label.
+* [ ] Set Straight Wall Direction to World X and export a wall running along World X.
+* [ ] Set Straight Wall Direction to World Y and export a wall running along World Y.
+* [ ] Set Straight Wall Direction to Auto Detect and confirm validation/export report the resolved direction.
+* [ ] Create a named Print Group from selected generated planes.
+* [ ] Use Select Group Objects to reselect the saved planes.
+* [ ] Validate Active Group and confirm an OK result for a straight wall.
+* [ ] Validate All Groups and confirm OK/warning/error counts are reported.
+* [ ] Delete or rename one stored object and confirm validation reports an error.
+* [ ] Add an angled/non-coplanar group and confirm validation reports an error.
+* [ ] Export Active Group to Folder and confirm the SVG filename comes from the group name.
+* [ ] Export All Groups to Folder and confirm one SVG is created per valid group.
+* [ ] Confirm Print Group SVGs include the group name as a title above the panels.
+* [ ] Delete or rename one stored object and confirm group export warns/skips it.
+* [ ] Delete a Print Group and confirm the objects remain in the scene.
+* [ ] Select non-coplanar / angled wall planes and confirm export is cancelled.
+* [ ] Confirm non-selected generated planes are not included.
 
 **General:**
 

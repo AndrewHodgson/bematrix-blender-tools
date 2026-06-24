@@ -9,6 +9,42 @@ available.
 import bpy
 
 
+def _print_group_items(self, context):
+    """Dynamic dropdown entries for saved Print Groups."""
+    items = []
+    for index, group in enumerate(self.print_groups):
+        count = len(group.objects)
+        label = group.group_name or f"Print Group {index + 1}"
+        items.append((str(index), label, f"{count} stored object(s)"))
+
+    if not items:
+        return [("NONE", "No Print Groups", "Create a Print Group first")]
+
+    return items
+
+
+class BEMATRIX_PrintGroupObjectItem(bpy.types.PropertyGroup):
+    object_name: bpy.props.StringProperty(
+        name="Object Name",
+        description="Name of a generated panel/SEG object stored in this Print Group",
+        default="",
+    )
+
+
+class BEMATRIX_PrintGroup(bpy.types.PropertyGroup):
+    group_name: bpy.props.StringProperty(
+        name="Group Name",
+        description="Saved Print Group name",
+        default="",
+    )
+
+    objects: bpy.props.CollectionProperty(
+        type=BEMATRIX_PrintGroupObjectItem,
+        name="Objects",
+        description="Generated panel/SEG object names stored in this Print Group",
+    )
+
+
 class BEMATRIX_PanelProperties(bpy.types.PropertyGroup):
     source_mode: bpy.props.EnumProperty(
         name="Source",
@@ -89,6 +125,43 @@ class BEMATRIX_PanelProperties(bpy.types.PropertyGroup):
         name="Update Existing Panels",
         description="Update existing generated panels instead of creating duplicates",
         default=True,
+    )
+
+    # --- Print Layout Export / Print Groups ---
+    print_group_name: bpy.props.StringProperty(
+        name="Group Name",
+        description="Name for a new Print Group created from the selected planes",
+        default="",
+    )
+
+    print_groups: bpy.props.CollectionProperty(
+        type=BEMATRIX_PrintGroup,
+        name="Print Groups",
+        description="Saved sets of generated panel/SEG objects for SVG export",
+    )
+
+    active_print_group: bpy.props.EnumProperty(
+        name="Active Print Group",
+        description="Saved Print Group to select or export",
+        items=_print_group_items,
+        default=0,
+    )
+
+    straight_wall_direction: bpy.props.EnumProperty(
+        name="Straight Wall Direction",
+        description="World axis used as the left-to-right direction for straight-wall SVG export",
+        items=[
+            ("AUTO", "Auto Detect", "Choose World X or World Y from the group's larger world-space spread"),
+            ("WORLD_X", "World X", "Use World X as the left-to-right wall/export direction"),
+            ("WORLD_Y", "World Y", "Use World Y as the left-to-right wall/export direction"),
+        ],
+        default="AUTO",
+    )
+
+    print_group_validation_status: bpy.props.StringProperty(
+        name="Validation Status",
+        description="Latest Print Group validation result",
+        default="No Print Group validation run yet.",
     )
 
     # --- Frame Transform (vertex-to-vertex snapping) ---
