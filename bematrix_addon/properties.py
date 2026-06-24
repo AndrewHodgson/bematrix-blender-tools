@@ -90,3 +90,18 @@ class BEMATRIX_PanelProperties(bpy.types.PropertyGroup):
         description="Update existing generated panels instead of creating duplicates",
         default=True,
     )
+
+    # --- Frame Transform (vertex-to-vertex snapping) ---
+    snap_target: bpy.props.FloatVectorProperty(
+        name="Snap Target",
+        description="Stored world-space target location for vertex-to-vertex snapping",
+        size=3,
+        subtype="TRANSLATION",
+        default=(0.0, 0.0, 0.0),
+    )
+
+    snap_target_set: bpy.props.BoolProperty(
+        name="Snap Target Set",
+        description="Whether a snap target has been stored",
+        default=False,
+    )

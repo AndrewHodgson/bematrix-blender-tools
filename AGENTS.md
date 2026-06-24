@@ -166,33 +166,84 @@ original behavior and MUST be preserved exactly (trim `6 mm`, offsets
 `-31 / +31 mm`, one panel per frame/array position, grid logic, duplicate
 prevention, unique materials). Hard panels are the stable, supported path.
 
-> **Status:** SEG Fabric is **partially working / incomplete**. It is added so
-> the UI and workflow exist, but it still needs testing and fixes. When working
-> on SEG, change only `seg_fabric.py` (and shared helpers if strictly needed) and
-> do **not** alter hard-panel behavior.
+`SEG Fabric` uses the **Smart SEG** builder (`create_smart_seg_panel` in
+`seg_fabric.py`). **The rule: one SEG mesh OBJECT per side, containing one or more
+planar face SECTIONS** — coplanar runs are one section, rotated frames / 90°
+corners become additional sections in the SAME object (do not split into separate
+objects unless absolutely necessary, and never stretch one flat face diagonally
+across a corner).
 
-`SEG Fabric` is different:
+* Operate on the frames returned by `get_target_frames`.
+* **One cell per frame AND per array instance.** Use the **full frame size** (no
+  trim). Expand Array modifiers with the same math as the panels
+  (`detect_all_array_settings` + `get_panel_array_positions`); each instance is a
+  cell. `_seg_cells_for_frame` returns each cell's 4 world corners and outward
+  normal.
+* **Frame depth / outside face.** `B62` = 62 mm deep, centered origin (front face
+  local Y `-31`, back `+31`). SEG sits 1 mm outside: front `-32`, back `+32`,
+  applied along each frame's **local Y**, then transformed by the frame's world
+  matrix — so rotated frames get the correct world-space face and normal.
+* **Group by plane.** Group cells by `_plane_key` (rounded unit normal + signed
+  plane distance). Coplanar, touching cells weld within a tolerance (**10% of the
+  smallest frame dimension**) into one connected section; a different plane
+  (rotated/corner) is a separate section. **Weld only within a section**, never
+  across a bend, so corners stay sharp and undistorted.
+* **Leave empty cells empty** — only real cells get a quad (L-shape stays L-shape).
+* **Parent to the main frame** (active selected frame, else first) and build the
+  mesh in that frame's LOCAL space (`main_frame.matrix_world.inverted() @ world`),
+  with identity local transform + identity `matrix_parent_inverse`, so it follows
+  the frames and is rotation-safe.
+* Winding sets outward normals (FRONT = local `-Y`, BACK = local `+Y`).
+* **UVs per section** in that section's own plane (real-world meters), sections
+  packed side-by-side in U so they do not overlap. Never collapse a rotated
+  section by projecting onto a single global axis; a 3-frame run must unwrap three
+  frame widths wide.
+* Object name `SEG_Fabric_Panel_<SIDE>_<main frame>`, unique material (Specular
+  IOR Level `0`), marked `is_bematrix_panel` / `bematrix_panel_kind = "SEG_SMART"`.
+  Identity is per main frame (match the main frame's `SEG_SMART` child of that
+  side; update on re-run; a different selection makes a separate object).
+* Print debug per run: frame name + world transform, side, each cell's normal and
+  corners, section/group assignment, and the generated object name + dimensions.
 
-* SEG planes use the **full frame size** (NOT frame size minus trim). A
-  `B62 0992 2418` frame makes a `992 x 2418 mm` plane.
-* SEG offsets are `-32 mm` (front) and `+32 mm` (back) — 1 mm outside the hard
-  panel.
-* An X array is combined into **one continuous plane across the whole X run**
-  (width = `(x_count - 1) * x_step + frame_width`), not one plane per frame.
-* An X/Z grid makes **one plane per Z row** (full X span wide, one frame tall).
-  A 3-wide × 2-high grid = 2 SEG planes per side.
-* Y arrays do not tile SEG (fabric does not stack in depth); ignore them.
-* SEG planes are named `BM_SEG_<SIDE>_<frame>_ROW001`, etc.
-* Match existing SEG planes by parent frame, side, and row index
-  (`bematrix_seg_row`). Increasing X count updates plane width; changing Z count
-  creates/deletes row planes; changing offsets moves planes.
-* Each SEG plane gets a unique material named from the SEG object name; keep
-  Specular IOR Level `0`.
+`Both Sides` makes one mesh per side. The legacy per-frame SEG function
+(`create_or_update_seg_for_frame`) is kept for reference but is no longer called.
 
-Hard panels and SEG planes are distinguished by a `bematrix_panel_kind` property
-(`"HARD"` / `"SEG"`). Each generation path must only delete/update its OWN kind so
-the two can coexist and neither breaks the other. `Delete Generated Panels`
-removes both (any `is_bematrix_panel` child).
+Hard panels and SEG meshes are distinguished by a `bematrix_panel_kind` property.
+**Only apply smart-cell behavior when Panel Type is SEG Fabric.** Hard-panel
+behavior (sizing, offsets, arrays/grids, duplicate prevention, materials) must
+stay unchanged.
+
+## Utilities: Convert Array to Individual Frames
+
+There is a generic **Utilities** section in the sidebar. Its first tool,
+**Convert Array to Individual Frames** (`bematrix.convert_array_to_frames`),
+breaks an arrayed frame into real, separate frame objects.
+
+Rules for converting arrays:
+
+* Operate on **selected** valid BeMatrix frames only. Ignore generated objects
+  (`BM_PANEL_`, `BM_SEG_`) and skip objects already marked
+  `bematrix_array_source`.
+* If a selected frame has **no** supported Array modifier, skip it and report
+  that no Array was found.
+* If it has one or two simple count-based Array modifiers, **create one real
+  frame object per array position** using the SAME array-position math as the
+  graphic panels (`get_panel_array_positions`). Do **not** apply the Array
+  modifier destructively to one mesh, and do **not** create one joined mesh.
+* Each generated frame must be a separate, selectable object that **duplicates
+  the original mesh/object**, keeps the original material(s), rotation, scale and
+  collection, and has **no Array modifiers**.
+* Name generated frames `<frame>_A001`, `<frame>_A002`, `<frame>_A001_B001`,
+  `<frame>_A001_B002`, etc.
+* **Hide the original array source instead of deleting it**, and tag it
+  `bematrix_array_source = True` (it keeps its Array modifier).
+* Tag each generated frame with `bematrix_array_broken_object = True`,
+  `bematrix_source_frame_name`, `bematrix_array_index_1`, and
+  `bematrix_array_index_2` (use `0` for the second index when there is only one
+  array).
+* This utility lives in `operators.py` and reuses `array_helpers.py`. It must
+  **not** change panel sizing, offsets, materials, duplicate prevention, or
+  array/grid panel behavior.
 
 ## Duplicate Prevention
 
@@ -427,7 +478,30 @@ Common:
 Actions:
 - Add / Update Graphic Panels
 - Delete Generated Panels
+
+Utilities:
+- Convert Array to Individual Frames
+
+Frame Transform:
+- Set Snap Target
+- Snap Frame to Target
+- Make Selected Local
 ```
+
+The sidebar panel name stays `Graphic Panels`. The `Utilities` and `Frame
+Transform` sections are generic collapsible groups for tools that are not panel
+generation; they will grow over time.
+
+**Frame Transform (vertex-to-vertex snapping).** `Set Snap Target` (Edit Mode,
+one vertex selected) stores that vertex's world location in
+`bematrix_panel_props.snap_target` and moves the 3D cursor there without moving
+the object. `Snap Frame to Target` (Edit Mode, one vertex selected on the object
+to move) translates the whole object by `target - source_vertex_world` so the
+source vertex lands exactly on the stored target, preserving rotation and scale
+(`obj.matrix_world = Matrix.Translation(delta) @ obj.matrix_world`), and leaves
+the cursor at the target. `Make Selected Local` (Object Mode) wraps
+`bpy.ops.object.make_local(type="SELECT_OBDATA")` to make the selected objects
+and their data local/editable.
 
 Keep the UI clear and expandable because this plugin will likely grow beyond graphic panels.
 
@@ -520,7 +594,7 @@ bematrix-blender-tools/
     hard_panels.py           hard graphic panel placement (stable)
     seg_fabric.py            SEG fabric placement (partially working)
     properties.py            Scene PropertyGroup (UI state)
-    operators.py             Add/Update and Delete operators
+    operators.py             Add/Update, Delete, Convert-Array-to-Frames operators
     ui.py                    sidebar panel
 ```
 

@@ -6,7 +6,7 @@ The first tool in this plugin is the **Graphic Panels** tool. It creates correct
 
 ## Current Status
 
-Version: `0.2.0-seg-fabric`
+Version: `0.4.0-seg-corners`
 Blender target: `5.1.0`
 Primary feature: Add/update graphic panel planes on BeMatrix frames.
 Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
@@ -23,7 +23,9 @@ Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
 | Front / back / both-side placement | ✅ Working |
 | Unique per-panel materials | ✅ Working |
 | Duplicate prevention / update-in-place | ✅ Working |
-| **SEG fabric** | ⚠️ Added, **partially working** — still needs testing and fixes |
+| Utility: Convert Array to Individual Frames | ✅ Working |
+| **SEG fabric (Smart SEG)** | ✅ Working — one connected mesh across selected frames |
+| Frame Transform: vertex-to-vertex snap | ✅ Working |
 
 SEG fabric is included so the workflow and UI exist, but it is **not** fully
 verified yet. Treat SEG output as work-in-progress. Hard-panel behavior is the
@@ -35,7 +37,7 @@ Blender caches enabled add-ons, so an old copy can keep running after you edit
 the package. To confirm the latest code is active:
 
 1. The version label is shown at the top of **View3D > Sidebar > BeMatrix >
-   Graphic Panels** (e.g. `Version: 0.2.0-seg-fabric`).
+   Graphic Panels** (e.g. `Version: 0.4.0-seg-corners`).
 2. When you click **Add / Update Graphic Panels**, the System Console prints the
    add-on version and the full loaded file path (this path points at a module
    inside the installed `bematrix_addon/` package, e.g. `.../operators.py`).
@@ -72,7 +74,7 @@ The Graphic Panels tool can:
 * Use real-world millimeter dimensions converted to Blender meters.
 * Generate real `_A001`, `_A002`, etc. panel objects for frames with one simple Array modifier.
 * Generate a grid of `_A###_B###` panel objects for frames with two stacked Array modifiers.
-* Generate **SEG Fabric** planes that use the full frame size and combine an X array into one continuous plane per row. ⚠️ *Partially working — still being tested and fixed.*
+* Generate **Smart SEG Fabric**: one connected fabric mesh that follows only the selected frames (one quad per frame, shared edges, empty cells left empty, real-world UVs).
 
 ---
 
@@ -503,43 +505,131 @@ The **Panel Type** dropdown selects what the tool generates:
 * **Hard Panel** (default) — the original behavior: trimmed flat panels, one per
   frame and per array position, with `6 mm` trim and `-31 / +31 mm` offsets.
   Everything above about arrays, grids, duplicates and materials applies.
-* **SEG Fabric** — fabric graphic planes for SEG frames.
+* **SEG Fabric (Smart SEG)** — one continuous fabric mesh that follows only the
+  **selected frames**.
 
-### SEG Fabric Behavior
+### Smart SEG Fabric Behavior
 
-* SEG planes are flat planes that use the **full frame size** (no trim). A
-  `B62 0992 2418` frame makes a `992 mm x 2418 mm` SEG plane.
-* SEG offsets sit **1 mm outside** the hard panel: front `-32 mm`, back `+32 mm`.
-* **X array → one continuous plane.** If the frame has an X array, the SEG plane
-  spans the whole X run instead of one plane per frame:
+With **Panel Type = SEG Fabric**, select the frame objects you want covered and
+click **Add / Update Graphic Panels**. The add-on builds **one SEG mesh object
+per side** that follows those frames:
+
+* **One cell per frame (and per array instance).** Each frame is one rectangular
+  SEG cell using the **full frame size** (no trim). If a selected frame still has
+  Array modifiers, each array instance becomes its own cell (same array math as
+  the panels), so straight arrays/grids work too.
+* **Outside-face offset (frame depth aware).** `B62` frames are `62 mm` deep with
+  a centered origin: the physical front face is at local Y `-31 mm` and the back
+  face at `+31 mm`. SEG sits **1 mm outside** the face to avoid clipping:
+  **front `-32 mm`, back `+32 mm`**, applied along each frame's **local Y**. When
+  frames are rotated, the front/back direction is each frame's local Y
+  transformed into world space.
+* **Plane grouping — bends at corners, no diagonal stretch.** Cells are grouped
+  by their **face plane**. Coplanar, touching cells weld into **one connected
+  planar section** (a straight wall or in-plane X/Z array/grid becomes one large
+  flat section). A rotated frame or **90° corner** has a different face normal,
+  so it becomes a **separate planar section in the same object** — the fabric
+  *bends* at the corner instead of being stretched flat across it.
+* **One object, multiple sections.** All sections live in a single SEG mesh
+  object for easy selection and material assignment; only genuinely different
+  planes are split (no extra objects).
+* **Empty grid spaces stay empty.** Only real cells get a quad (an L-shaped
+  selection makes an L-shaped mesh, no missing-cell fill). Within a coplanar
+  section, near-adjacent cells are welded within a tolerance (10% of the smallest
+  frame dimension) so small placement gaps still connect.
+* **Parented to the main frame and rotation-safe.** The mesh is built in the
+  **main frame's local space** and parented to it, so it follows the frames and
+  is correct even if the whole group is rotated. The **main frame** is the active
+  selected frame (the last one you clicked), or the first frame if none is
+  active. `Both Sides` makes one mesh per side.
+
+Examples (39.06 = a 992 mm frame in inches):
+
+```text
+3 frames in a row        -> one mesh, 1 coplanar section, overall 117.18 x 39.06
+2 in a row + 1 above #2  -> one mesh, 1 section, L-shaped (no upper-left fill)
+straight run + 90deg run -> one mesh, 2 planar sections that bend at the corner
+```
+
+**UVs** use real-world planar coordinates (meters), computed **per section in
+that section's own plane**, so rotated/corner sections unwrap cleanly (a vertical
+or perpendicular run is not collapsed). Sections are packed side-by-side in U so
+they do not overlap; within a section UVs are continuous and preserve real
+dimensions (a 3-frame-wide run unwraps three frame widths wide). Normals face
+outward on the chosen side.
+
+* The mesh object is named `SEG_Fabric_Panel_<SIDE>_<main frame>` (e.g.
+  `SEG_Fabric_Panel_FRONT_B62 0992 0992`), is **parented to the main frame**,
+  gets its own unique material (white, Specular IOR Level `0`), and is marked so
+  it is excluded from source-frame detection.
+* **Re-running with the same main frame updates that frame's SEG mesh.**
+  Selecting a **different** group (different main frame) makes a **separate** SEG
+  mesh and leaves the earlier ones intact.
+* Because the SEG mesh is now a child of its main frame, **Delete Generated
+  Panels** removes it along with other generated children of that frame.
+
+Hard panels and SEG meshes are tracked independently (via a
+`bematrix_panel_kind` property), so switching type does not delete the other.
+
+---
+
+## Utilities
+
+The sidebar panel has a generic **Utilities** section for tools that are not
+panel generation.
+
+### Convert Array to Individual Frames
+
+This turns an arrayed BeMatrix frame into real, separate frame objects — one per
+array position — without applying the Array modifier to a single mesh and
+without joining anything.
+
+**How it works:**
+
+1. Select one or more BeMatrix **frame** objects (generated `BM_PANEL_` and
+   `BM_SEG_` objects are ignored).
+2. Click **Utilities > Convert Array to Individual Frames**.
+3. For each selected frame:
+   * If it has **no** supported Array modifier, it is skipped and reported as
+     "No Array found".
+   * If it has **one or two** simple count-based Array modifiers, the add-on
+     creates one real frame object per array position, using the **same
+     array-position math** as the graphic panels.
+
+**Each generated frame:**
+
+* Is a separate, selectable object with its **own duplicated mesh** (not an
+  instance, not one joined mesh).
+* Keeps the original **material(s), rotation, scale, and collection**.
+* Has **no Array modifiers**.
+* Is named after the source frame plus the array index:
 
   ```text
-  frame width 992 mm, X array count 3  ->  SEG width = 992 * 3 = 2976 mm
-  SEG height = frame height
+  B62 0992 0992_A001
+  B62 0992 0992_A002
+  B62 0992 0992_A001_B001
+  B62 0992 0992_A001_B002
   ```
 
-* **X/Z grid → one plane per Z row.** A 3-wide × 2-high grid makes **2** SEG
-  planes per side; each plane is the full X span wide and one frame tall.
-* SEG planes are named per row:
+* Gets custom properties:
 
   ```text
-  BM_SEG_FRONT_B62 0992 2418_ROW001
-  BM_SEG_BACK_B62 0992 2418_ROW001
-  BM_SEG_FRONT_B62 0992 2418_ROW002
+  bematrix_array_broken_object = True
+  bematrix_source_frame_name   = <original frame name>
+  bematrix_array_index_1       = <1-based index along Array 1>
+  bematrix_array_index_2       = <1-based index along Array 2, or 0 if single array>
   ```
 
-* Re-running updates existing SEG planes (matched by parent frame, side, and row
-  index). Increasing the X count updates the plane width; increasing/decreasing
-  the Z count creates/deletes row planes; changing offsets moves the planes.
-* Each SEG plane gets its **own unique material** named from the SEG object name
-  (e.g. `MAT_BM_SEG_FRONT_B62_0992_2418_ROW001`), white with Specular IOR
-  Level `0`.
-* Generated `BM_SEG_` objects are excluded from source-frame detection, like
-  `BM_PANEL_` objects.
+**The original array source is hidden, not deleted.** It keeps its Array modifier
+and is tagged with `bematrix_array_source = True`, so you can unhide and re-array
+it later if needed.
 
-Hard panels and SEG planes are tracked independently (via a `bematrix_panel_kind`
-property), so switching type and re-running does not delete the other type. Use
-**Delete Generated Panels** to clear everything.
+> Note: this is a one-way "break apart" utility — it duplicates objects. Running
+> it again on the same already-broken frames does nothing (they no longer have an
+> Array modifier) and is reported as "No Array found".
+
+This utility is separate from panel generation and does **not** change panel
+sizing, offsets, materials, duplicate prevention, or array/grid panel behavior.
 
 ---
 
@@ -577,6 +667,44 @@ relative offset of `1.0` behave like a literal `1.0 m` step, putting panels at
 > console prints which modifier type was detected, the count, the offset
 > settings, and the computed step vector, so you can confirm what the add-on
 > read.
+
+---
+
+## Frame Transform
+
+A collapsible **Frame Transform** section provides CAD-like vertex-to-vertex
+placement of frames. Both buttons work in **Edit Mode** with **one vertex
+selected**.
+
+### Set Snap Target
+
+1. Tab into Edit Mode on any object and select **one vertex** (the destination).
+2. Click **Set Snap Target**.
+
+The vertex's world-space location is stored as the snap target and the **3D
+cursor** moves there. The object is **not** moved.
+
+### Snap Frame to Target
+
+1. Tab into Edit Mode on the frame/object you want to move and select **one
+   vertex** (the source point).
+2. Click **Snap Frame to Target**.
+
+The **whole object** moves so the selected source vertex lands exactly on the
+stored target. **Rotation and scale are preserved** (it is a pure translation),
+and the 3D cursor stays at the target.
+
+Typical use: select the destination vertex on a placed frame → Set Snap Target;
+then in the frame you are positioning, select the matching corner vertex → Snap
+Frame to Target, and the two vertices coincide exactly.
+
+### Make Selected Local
+
+Click **Make Selected Local** (Object Mode, with object(s) selected) to make the
+selected objects **and their mesh data** local/editable. This is the equivalent
+of **Object > Relations > Make Local > Selected Objects and Data**, useful after
+appending/linking BeMatrix frames so they can be edited and snapped. It is
+independent of the snap tools above.
 
 ---
 
@@ -690,8 +818,9 @@ bematrix-blender-tools/
 * **`seg_fabric.py`** — SEG fabric placement (full frame size, combined X run,
   one plane per Z row). Still being tested/fixed; kept separate from hard panels.
 * **`properties.py`** — the `BEMATRIX_PanelProperties` group backing the UI.
-* **`operators.py`** — the operators; dispatches each frame to the hard or SEG
-  generator based on Panel Type and prints diagnostics.
+* **`operators.py`** — the operators: Add/Update (dispatches each frame to the
+  hard or SEG generator based on Panel Type), Delete Generated Panels, and the
+  **Convert Array to Individual Frames** utility. Prints diagnostics.
 * **`ui.py`** — the sidebar panel layout only (no placement logic).
 
 ### Dependency direction (no circular imports)
@@ -724,11 +853,39 @@ Test inside Blender after every meaningful change. Open the System Console
 * [ ] Material / image assignment — each panel has its own `MAT_…` material.
 * [ ] Re-run does not create duplicates; changing counts adds/removes panels.
 
-**SEG fabric (partially working — expect issues, log them):**
+**Smart SEG fabric (Panel Type = SEG Fabric, select frames):**
 
-* [ ] Single frame SEG — one full-size plane per side, offsets `-32` / `+32 mm`.
-* [ ] Horizontal array SEG — one continuous plane across the whole X run.
-* [ ] Grid array SEG — one plane per Z row.
+* [ ] Three frames in a row → one mesh, **1 coplanar section**, overall 3× frame
+  width. Console shows `sections=1`.
+* [ ] L-shape (2 in a row + 1 above the second) → one mesh, 1 section, no filled
+  missing cell, no gap at the junction.
+* [ ] **90° corner:** a straight run plus a frame rotated 90° next to it → one
+  mesh with **2 planar sections** that **bend** at the corner (the face does
+  **not** stretch diagonally). Console shows `sections=2`.
+* [ ] **Rotated whole group** → mesh follows the rotation; front faces sit 1 mm
+  outside each frame's local-Y face (`-32`/`+32 mm`).
+* [ ] **Array still on the frame** → array instances are expanded into cells and
+  merge into the coplanar section (straight arrays/grids still work).
+* [ ] UVs: a 3-wide run unwraps three frame widths wide; a rotated section is
+  **not** collapsed; sections don't overlap in the UV editor.
+* [ ] The SEG mesh is **parented to the main (active) frame** and moves with it.
+* [ ] Group A then group B → **two** separate SEG meshes; A is not removed.
+  Re-running the same group updates it (no duplicate).
+* [ ] Both Sides → one `SEG_Fabric_Panel_FRONT_<frame>` and one `..._BACK_<frame>`.
+* [ ] Console debug prints frame transforms, per-cell normals/corners, section
+  assignment, and the object name + dimensions.
+* [ ] **Delete Generated Panels** removes the SEG mesh (child of its frame).
+
+**Utilities — Convert Array to Individual Frames:**
+
+* [ ] Single X-array frame → one real frame per copy (`_A001`, `_A002`, …) at the
+  array positions; original hidden and tagged `bematrix_array_source`.
+* [ ] Two-array (X/Z grid) frame → `_A###_B###` frames for every combination.
+* [ ] Frame with no Array → skipped and reported "No Array found".
+* [ ] Generated frames keep material, rotation, scale, collection, and have no
+  Array modifier; each has its own mesh (edit one, others unaffected).
+* [ ] Generated frames carry `bematrix_array_broken_object`,
+  `bematrix_source_frame_name`, `bematrix_array_index_1`, `bematrix_array_index_2`.
 
 **General:**
 

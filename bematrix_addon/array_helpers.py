@@ -323,6 +323,15 @@ def _array_settings_from_modifier(modifier):
     return None
 
 
+def is_supported_array_modifier(modifier):
+    """
+    True if this modifier is a supported array (classic Array or a Geometry Nodes
+    array asset). Used to strip array modifiers from generated/broken frames
+    without touching unrelated modifiers.
+    """
+    return _array_settings_from_modifier(modifier) is not None
+
+
 def detect_array_settings(frame_obj):
     """
     Return normalized ArraySettings for the FIRST supported array-like modifier
