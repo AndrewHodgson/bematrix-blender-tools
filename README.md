@@ -6,7 +6,7 @@ The first tool in this plugin is the **Graphic Panels** tool. It creates correct
 
 ## Current Status
 
-Version: `0.8.2-dimension-calibration`
+Version: `0.8.6-curved-arc-fit`
 Blender target: `5.1.0`
 Primary feature: Add/update graphic panel planes on BeMatrix frames.
 Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
@@ -38,7 +38,7 @@ Blender caches enabled add-ons, so an old copy can keep running after you edit
 the package. To confirm the latest code is active:
 
 1. The version label is shown at the top of **View3D > Sidebar > BeMatrix >
-   Graphic Panels** (e.g. `Version: 0.8.2-dimension-calibration`).
+   Graphic Panels** (e.g. `Version: 0.8.6-curved-arc-fit`).
 2. When you click **Add / Update Graphic Panels**, the System Console prints the
    add-on version and the full loaded file path (this path points at a module
    inside the installed `bematrix_addon/` package, e.g. `.../operators.py`).
@@ -194,7 +194,7 @@ dist/
 Example output:
 
 ```text
-dist/bematrix_blender_tools_v0.8.2.zip
+dist/bematrix_blender_tools_v0.8.6.zip
 ```
 
 The ZIP contains the correct top-level add-on folder:

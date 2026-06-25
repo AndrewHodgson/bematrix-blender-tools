@@ -41,6 +41,11 @@ from .array_helpers import (
 )
 from .hard_panels import create_or_update_panel_for_frame
 from .seg_fabric import create_smart_seg_panel
+from .curved_frames import (
+    create_or_update_curved_panel_for_frame,
+    curved_face_for_panel_side,
+    parse_curved_frame_from_name,
+)
 
 
 class BEMATRIX_OT_UpdateAddonFromZip(bpy.types.Operator, ImportHelper):
@@ -232,24 +237,63 @@ class BEMATRIX_OT_AddGraphicPanels(bpy.types.Operator):
                     print(f"  [{side_label}] SKIPPED: {details['error']}")
                     continue
 
-                for name, location, mat_name in details["created"]:
+                for entry in details["created"]:
+                    name, location, mat_name = entry[0], entry[1], entry[-1]
                     print(
                         f"  [{side_label}] created: {name} at "
                         f"{tuple(round(v, 4) for v in location)}  material={mat_name}"
                     )
-                for name, location, mat_name in details["updated"]:
+                for entry in details["updated"]:
+                    name, location, mat_name = entry[0], entry[1], entry[-1]
                     print(
                         f"  [{side_label}] updated: {name} at "
                         f"{tuple(round(v, 4) for v in location)}  material={mat_name}"
                     )
                 for name in details["deleted_names"]:
                     print(f"  [{side_label}] deleted stale: {name}")
+                if details.get("is_curved"):
+                    bounds = details["local_bounds"]
+                    print(
+                        f"  [{side_label}] curved frame: selected frame={frame_obj.name}, "
+                        f"path={details['detection_path']}, "
+                        f"family={details['family_mm']}, "
+                        f"R{details['radius_mm']} angle={details['angle_degrees']} deg, "
+                        f"selected Panel Side={side_label}, "
+                        f"resolved curved side={details['curved_face_label']}, "
+                        f"mesh={details['panel_width_mm']} x {details['panel_height_mm']} mm, "
+                        f"segments={details['mesh_segment_count']}"
+                    )
+                    print(
+                        f"      local bounds: "
+                        f"x=({bounds['min_x']:.4f}, {bounds['max_x']:.4f}), "
+                        f"y=({bounds['min_y']:.4f}, {bounds['max_y']:.4f}), "
+                        f"z=({bounds['min_z']:.4f}, {bounds['max_z']:.4f})"
+                    )
+                    print(
+                        f"      arc: center={tuple(round(v, 4) for v in details['arc_center'])}, "
+                        f"radius={details['arc_radius_m']:.4f} m, "
+                        f"start={details['arc_start_angle_degrees']:.2f} deg, "
+                        f"end={details['arc_end_angle_degrees']:.2f} deg, "
+                        f"direction={details['arc_direction']}, "
+                        f"fit_score={details['arc_fit_score']:.6f}"
+                    )
+                    print(
+                        f"      first vertex={tuple(round(v, 4) for v in details['first_vertex'])}, "
+                        f"last vertex={tuple(round(v, 4) for v in details['last_vertex'])}"
+                    )
+                    for entry in details["created"] + details["updated"]:
+                        name, location, rotation, _mat_name = entry
+                        print(
+                            f"      curved object: {name}, "
+                            f"location={tuple(round(v, 4) for v in location)}, "
+                            f"rotation={tuple(round(v, 4) for v in rotation)}"
+                        )
                 print(
                     "  "
                     + format_dimension_validation(
                         f"{frame_obj.name} {side_label} hard panel",
-                        panel_w_mm,
-                        panel_h_mm,
+                        details["panel_width_mm"] if details.get("is_curved") else panel_w_mm,
+                        details["panel_height_mm"] if details.get("is_curved") else panel_h_mm,
                         details["panel_width_mm"],
                         details["panel_height_mm"],
                     )
@@ -284,35 +328,113 @@ class BEMATRIX_OT_AddGraphicPanels(bpy.types.Operator):
         made = 0
         cells_total = 0
 
+        curved_frames = [
+            frame for frame in frames
+            if parse_curved_frame_from_name(frame.name, frame_height_mm=(get_frame_size_mm(frame) or (None, None))[1])
+        ]
+        straight_frames = [frame for frame in frames if frame not in curved_frames]
+
         for side_label, offset_mm in sides:
-            obj, seg_info = create_smart_seg_panel(
-                context,
-                frames,
-                side_label,
-                offset_mm,
-                replace_existing=props.replace_existing,
-            )
+            if straight_frames:
+                obj, seg_info = create_smart_seg_panel(
+                    context,
+                    straight_frames,
+                    side_label,
+                    offset_mm,
+                    replace_existing=props.replace_existing,
+                )
 
-            if obj is None:
-                print(f"  [{side_label}] SKIPPED: {seg_info.get('error')}")
-                continue
+                if obj is None:
+                    print(f"  [{side_label}] SKIPPED: {seg_info.get('error')}")
+                else:
+                    made += 1
+                    cells_total += seg_info["quad_count"]
+                    verb = "created" if seg_info.get("created") else "updated"
+                    print(
+                        f"  [{side_label}] {verb}: {obj.name} "
+                        f"({seg_info['quad_count']} face(s), "
+                        f"{seg_info.get('section_count', 1)} section(s), "
+                        f"{seg_info.get('mitre_count', seg_info.get('bridge_count', 0))} "
+                        f"corner mitre(s), "
+                        f"{seg_info['vert_count']} verts, "
+                        f"material={seg_info.get('material')})"
+                    )
+                    if seg_info.get("skipped"):
+                        print(
+                            f"  [{side_label}] skipped {seg_info['skipped']} frame(s) "
+                            f"with no detectable size"
+                        )
 
-            made += 1
-            cells_total += seg_info["quad_count"]
-            verb = "created" if seg_info.get("created") else "updated"
-            print(
-                f"  [{side_label}] {verb}: {obj.name} "
-                f"({seg_info['quad_count']} face(s), "
-                f"{seg_info.get('section_count', 1)} section(s), "
-                f"{seg_info.get('mitre_count', seg_info.get('bridge_count', 0))} "
-                f"corner mitre(s), "
-                f"{seg_info['vert_count']} verts, "
-                f"material={seg_info.get('material')})"
-            )
-            if seg_info.get("skipped"):
+            for frame_obj in curved_frames:
+                frame_size = get_frame_size_mm(frame_obj)
+                frame_height_mm = frame_size[1] if frame_size else None
+                array_list = detect_all_array_settings(frame_obj, limit=2)
+                curved_face = curved_face_for_panel_side(side_label)
+                if curved_face is None:
+                    print(
+                        f"  [{side_label}] curved SEG SKIPPED {frame_obj.name}: "
+                        "curved frames support Front -Y (Outside Curve) and Back +Y (Inside Curve) only."
+                    )
+                    continue
+                panel_count, details = create_or_update_curved_panel_for_frame(
+                    frame_obj=frame_obj,
+                    side_label=side_label,
+                    side_offset_mm=offset_mm,
+                    frame_height_mm=frame_height_mm,
+                    array_list=array_list,
+                    curved_face=curved_face,
+                    panel_kind="SEG_CURVED",
+                    replace_existing=props.replace_existing,
+                )
+                if details.get("error"):
+                    print(f"  [{side_label}] curved SEG SKIPPED {frame_obj.name}: {details['error']}")
+                    continue
+                made += panel_count
+                cells_total += panel_count
+                for entry in details["created"]:
+                    name, location, rotation, mat_name = entry
+                    print(f"  [{side_label}] curved SEG created: {name} material={mat_name}")
+                    print(
+                        f"      location={tuple(round(v, 4) for v in location)}, "
+                        f"rotation={tuple(round(v, 4) for v in rotation)}"
+                    )
+                for entry in details["updated"]:
+                    name, location, rotation, mat_name = entry
+                    print(f"  [{side_label}] curved SEG updated: {name} material={mat_name}")
+                    print(
+                        f"      location={tuple(round(v, 4) for v in location)}, "
+                        f"rotation={tuple(round(v, 4) for v in rotation)}"
+                    )
+                for name in details["deleted_names"]:
+                    print(f"  [{side_label}] curved SEG deleted stale: {name}")
+                bounds = details["local_bounds"]
                 print(
-                    f"  [{side_label}] skipped {seg_info['skipped']} frame(s) "
-                    f"with no detectable size"
+                    f"  [{side_label}] curved SEG frame: {frame_obj.name}, "
+                    f"path={details['detection_path']}, "
+                    f"family={details['family_mm']}, "
+                    f"R{details['radius_mm']} angle={details['angle_degrees']} deg, "
+                    f"selected Panel Side={side_label}, "
+                    f"resolved curved side={details['curved_face_label']}, "
+                    f"mesh={details['panel_width_mm']} x {details['panel_height_mm']} mm, "
+                    f"segments={details['mesh_segment_count']}"
+                )
+                print(
+                    f"      local bounds: "
+                    f"x=({bounds['min_x']:.4f}, {bounds['max_x']:.4f}), "
+                    f"y=({bounds['min_y']:.4f}, {bounds['max_y']:.4f}), "
+                    f"z=({bounds['min_z']:.4f}, {bounds['max_z']:.4f})"
+                )
+                print(
+                    f"      arc: center={tuple(round(v, 4) for v in details['arc_center'])}, "
+                    f"radius={details['arc_radius_m']:.4f} m, "
+                    f"start={details['arc_start_angle_degrees']:.2f} deg, "
+                    f"end={details['arc_end_angle_degrees']:.2f} deg, "
+                    f"direction={details['arc_direction']}, "
+                    f"fit_score={details['arc_fit_score']:.6f}"
+                )
+                print(
+                    f"      first vertex={tuple(round(v, 4) for v in details['first_vertex'])}, "
+                    f"last vertex={tuple(round(v, 4) for v in details['last_vertex'])}"
                 )
 
         self.report(
@@ -542,6 +664,17 @@ def _template_scale_label(scale):
     if abs(percent - round(percent)) < 1e-6:
         return f"{int(round(percent))}%"
     return f"{percent:.2f}%"
+
+
+def _export_item_top_v(item):
+    """
+    Top edge in projected Blender/export coordinates.
+
+    Blender/world vertical coordinates increase upward. SVG y coordinates
+    increase downward, so SVG top-left placement must measure down from the
+    group's highest projected v value.
+    """
+    return item.get("max_v", item["min_v"] + item.get("height_m", 0.0))
 
 
 def _artboard_name_for_record(group_abbr, group_name, graphic_id, panel_index, naming_mode):
@@ -1104,10 +1237,7 @@ def _svg_for_export_items(export_items, print_group_name=None, export_options=No
         for item in export_items
     )
     min_v = min(item["min_v"] for item in export_items)
-    max_v = max(
-        item["min_v"] + item.get("height_m", item["max_v"] - item["min_v"])
-        for item in export_items
-    )
+    max_v = max(_export_item_top_v(item) for item in export_items)
 
     title_band_in = SVG_TITLE_BAND_IN if include_title else 0.0
     document_width_in = meters_to_inches(max_u - min_u) * template_scale + SVG_MARGIN_IN * 2.0
@@ -1120,7 +1250,7 @@ def _svg_for_export_items(export_items, print_group_name=None, export_options=No
 
     def item_svg_rect(item):
         x = meters_to_inches(item["min_u"] - min_u) * template_scale + SVG_MARGIN_IN
-        y = meters_to_inches(item["min_v"] - min_v) * template_scale + SVG_MARGIN_IN + title_band_in
+        y = meters_to_inches(max_v - _export_item_top_v(item)) * template_scale + SVG_MARGIN_IN + title_band_in
         return x, y, item["width_in"] * template_scale, item["height_in"] * template_scale
 
     lines = [
@@ -1287,7 +1417,7 @@ def _layout_records_for_export_items(
     """Return panel/artboard rows using the exact SVG rectangle coordinates."""
     export_options = export_options or _svg_export_options()
     min_u = min(item["min_u"] for item in export_items)
-    min_v = min(item["min_v"] for item in export_items)
+    max_v = max(_export_item_top_v(item) for item in export_items)
     include_title = bool(print_group_name) and export_options["include_print_group_title"]
     title_band_in = SVG_TITLE_BAND_IN if include_title else 0.0
     id_prefix = _sanitize_svg_id(print_group_name or "Selected Planes", fallback="panel")
@@ -1309,7 +1439,7 @@ def _layout_records_for_export_items(
         )
         obj["bm_artboard_name"] = artboard_name
         real_x_in = meters_to_inches(item["min_u"] - min_u) + SVG_MARGIN_IN
-        real_y_in = meters_to_inches(item["min_v"] - min_v) + SVG_MARGIN_IN + title_band_in
+        real_y_in = meters_to_inches(max_v - _export_item_top_v(item)) + SVG_MARGIN_IN + title_band_in
         records.append({
             "graphic_id": graphic_id,
             "print_group_abbr": group_abbr,

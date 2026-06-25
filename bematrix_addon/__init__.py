@@ -7,6 +7,7 @@ modules. Responsibilities:
     utils.py          shared helpers, constants, frame detection, naming
     materials.py      unique per-object material creation
     array_helpers.py  array/grid detection, step math, modifier dump
+    curved_frames.py  curved frame detection and mesh generation
     hard_panels.py    hard graphic panel placement
     seg_fabric.py     SEG fabric placement (not yet fully working)
     properties.py     Scene PropertyGroup
@@ -21,7 +22,7 @@ unregister order is reversed.
 bl_info = {
     "name": "BeMatrix Graphic Panels",
     "author": "Andrew Hodgson / ChatGPT",
-    "version": (0, 8, 2),
+    "version": (0, 8, 6),
     "blender": (5, 1, 0),
     "location": "View3D > Sidebar > BeMatrix > Graphic Panels",
     "description": "Add correctly sized graphic panel planes to selected BeMatrix frames.",
@@ -35,6 +36,7 @@ from . import (
     utils,
     materials,
     array_helpers,
+    curved_frames,
     hard_panels,
     seg_fabric,
     properties,
@@ -55,6 +57,7 @@ if "_BEMATRIX_MODULES_LOADED" in globals():
         utils,
         materials,
         array_helpers,
+        curved_frames,
         hard_panels,
         seg_fabric,
         properties,

@@ -22,6 +22,11 @@ from .array_helpers import (
     get_panel_array_positions,
     remove_generated_array_modifiers,
 )
+from .curved_frames import (
+    create_or_update_curved_panel_for_frame,
+    curved_face_for_panel_side,
+    parse_curved_frame_from_name,
+)
 
 
 def find_existing_panel(frame_obj, side_label, index_1=None, index_2=None):
@@ -107,6 +112,23 @@ def create_or_update_panel_for_frame(
         "panel_count": 0,
         "error": None,
     }
+
+    if parse_curved_frame_from_name(frame_obj.name, frame_height_mm=frame_height_mm):
+        curved_face = curved_face_for_panel_side(side_label)
+        if curved_face is None:
+            details["error"] = "Curved frames support Front -Y (Outside Curve) and Back +Y (Inside Curve) only."
+            details["is_curved"] = True
+            return 0, details
+        return create_or_update_curved_panel_for_frame(
+            frame_obj=frame_obj,
+            side_label=side_label,
+            side_offset_mm=side_offset_mm,
+            frame_height_mm=frame_height_mm,
+            array_list=array_list,
+            curved_face=curved_face,
+            panel_kind="HARD_CURVED",
+            replace_existing=replace_existing,
+        )
 
     panel_width_mm, panel_height_mm = get_hard_panel_size_mm(
         frame_width_mm,

@@ -16,7 +16,7 @@ from mathutils import Vector
 # Human-readable add-on version. Bump this on every meaningful change so the
 # version shown in the sidebar and printed to the console proves Blender loaded
 # the latest file (Blender caches enabled add-ons aggressively).
-ADDON_VERSION = "0.8.2-dimension-calibration"
+ADDON_VERSION = "0.8.6-curved-arc-fit"
 
 
 # Common BeMatrix frame dimensions from your chart.
@@ -227,7 +227,48 @@ def get_frame_size_mm(obj):
     if from_name:
         return from_name
 
+    curved_size = parse_curved_frame_size_from_name(obj.name)
+    if curved_size:
+        return curved_size
+
     return get_local_bbox_size_mm(obj)
+
+
+def parse_curved_frame_size_from_name(obj_name: str):
+    """
+    Lightweight curved-frame source detection.
+
+    The detailed curved radius/angle table lives in curved_frames.py. This
+    helper only lets names like "B62 90 R992 2418" pass source-frame filtering
+    by returning a nominal (radius, height) pair.
+    """
+    base_name = strip_blender_duplicate_suffix(obj_name)
+    asset_match = re.search(
+        r"\bB\d{2,3}_(?P<family>\d{4})_CURVE_"
+        r"\d+(?:[pP]\d+)?_H(?P<height>\d{3,4})\b",
+        base_name,
+        re.IGNORECASE,
+    )
+    if asset_match:
+        return int(asset_match.group("family")), int(asset_match.group("height"))
+
+    radius_match = re.search(r"\bR\s*(\d+)(?:\.\d+)?\b", base_name, re.IGNORECASE)
+    if not radius_match:
+        return None
+
+    radius_mm = int(radius_match.group(1))
+    without_radius = re.sub(r"\bR\s*\d+(?:\.\d+)?\b", " ", base_name, flags=re.IGNORECASE)
+    numbers = re.findall(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", without_radius)
+    height_candidates = []
+    for number in numbers:
+        value = int(round(float(number)))
+        if value in BEMATRIX_FRAME_SIZES_MM:
+            height_candidates.append(value)
+
+    if not height_candidates:
+        return None
+
+    return radius_mm, height_candidates[-1]
 
 
 def is_marked_panel(obj):
