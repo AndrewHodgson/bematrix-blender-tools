@@ -21,7 +21,7 @@ unregister order is reversed.
 bl_info = {
     "name": "BeMatrix Graphic Panels",
     "author": "Andrew Hodgson / ChatGPT",
-    "version": (0, 6, 6),
+    "version": (0, 6, 7),
     "blender": (5, 1, 0),
     "location": "View3D > Sidebar > BeMatrix > Graphic Panels",
     "description": "Add correctly sized graphic panel planes to selected BeMatrix frames.",

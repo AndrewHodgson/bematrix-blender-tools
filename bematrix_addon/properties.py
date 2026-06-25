@@ -147,6 +147,16 @@ class BEMATRIX_PanelProperties(bpy.types.PropertyGroup):
         default=0,
     )
 
+    print_export_mode: bpy.props.EnumProperty(
+        name="Export Mode",
+        description="Choose straight-wall export or simple two-segment corner unfolding",
+        items=[
+            ("STRAIGHT", "Straight Wall", "Export one straight, coplanar wall layout"),
+            ("UNFOLD", "Unfold Connected Walls", "Export a simple connected World X / World Y corner as one flat SVG"),
+        ],
+        default="STRAIGHT",
+    )
+
     straight_wall_direction: bpy.props.EnumProperty(
         name="Straight Wall Direction",
         description="World axis used as the left-to-right direction for straight-wall SVG export",

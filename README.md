@@ -6,7 +6,7 @@ The first tool in this plugin is the **Graphic Panels** tool. It creates correct
 
 ## Current Status
 
-Version: `0.6.6-print-export-ui`
+Version: `0.6.7-print-export-unfold`
 Blender target: `5.1.0`
 Primary feature: Add/update graphic panel planes on BeMatrix frames.
 Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
@@ -23,7 +23,7 @@ Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
 | Front / back / both-side placement | ✅ Working |
 | Unique per-panel materials | ✅ Working |
 | Duplicate prevention / update-in-place | ✅ Working |
-| Print Layout Export: selected / grouped straight-wall SVG + validation | Phase 4 |
+| Print Layout Export: selected / grouped SVG, validation, simple L-wall unfold | Phase 5 |
 | Utility: Convert Array to Individual Frames | ✅ Working |
 | **SEG fabric (Smart SEG)** | ✅ Working — one connected mesh across selected frames |
 | Frame Transform: vertex-to-vertex snap | ✅ Working |
@@ -38,7 +38,7 @@ Blender caches enabled add-ons, so an old copy can keep running after you edit
 the package. To confirm the latest code is active:
 
 1. The version label is shown at the top of **View3D > Sidebar > BeMatrix >
-   Graphic Panels** (e.g. `Version: 0.6.6-print-export-ui`).
+   Graphic Panels** (e.g. `Version: 0.6.7-print-export-unfold`).
 2. When you click **Add / Update Graphic Panels**, the System Console prints the
    add-on version and the full loaded file path (this path points at a module
    inside the installed `bematrix_addon/` package, e.g. `.../operators.py`).
@@ -193,7 +193,7 @@ dist/
 Example output:
 
 ```text
-dist/bematrix_blender_tools_v0.6.6.zip
+dist/bematrix_blender_tools_v0.6.7.zip
 ```
 
 The ZIP contains the correct top-level add-on folder:
@@ -647,21 +647,40 @@ The panel is organized into **Print Groups**, **Export Options**, and
 **Validation Options** so creation/selection, export settings/actions, and
 preflight checks stay separate.
 
-Use it for straight-wall layouts only:
+Use it for straight-wall layouts or simple two-segment corner unfolds:
 
 1. Select the generated panel/SEG plane objects to export.
 2. Open **View3D Sidebar > BeMatrix > Print Layout Export**.
-3. Click **Export Selected Planes to SVG** and choose a `.svg` filepath.
+3. Choose an **Export Mode**.
+4. Click **Export Selected Planes to SVG** and choose a `.svg` filepath.
 
 The SVG is true-size, uses inches as the document unit, and preserves the real
 world spacing/gaps between the selected planes based on their world-space mesh
 vertices. Each exported plane becomes an editable SVG rectangle with a text label
 showing the object name plus width and height in inches.
 
+### Export Mode
+
+**Straight Wall** is the default and safest mode. It preserves the Phase 4
+straight-wall behavior: all exported planes must be rectangular, approximately
+coplanar, and compatible with the chosen **Straight Wall Direction**.
+
+**Unfold Connected Walls** supports a simple connected two-segment corner group,
+such as one World X wall segment meeting one perpendicular World Y wall segment.
+The export lays the segments into one flat horizontal SVG: World X first, then
+World Y, with panels inside each segment sorted by their world position along
+that segment. Real spacing and gaps inside each segment are preserved, and the
+second segment starts immediately after the first in the unfolded layout.
+
+Unfold mode is intentionally limited in this phase. It does not support complex
+U-shapes, multiple corners, curved walls, angled/non-axis-aligned walls, manual
+drag-and-drop ordering, bleed, crop marks, safe lines, PDF export, Illustrator
+automation, artboard creation, or re-import/apply-art workflows.
+
 ### Straight Wall Direction
 
 The **Straight Wall Direction** setting controls which world axis becomes the
-left-to-right direction in the SVG:
+left-to-right direction in the SVG when **Export Mode** is **Straight Wall**:
 
 * **Auto Detect** — compares the group's world-space X and Y spread and uses the
   larger spread as the wall direction. If the spread is ambiguous, it falls back
@@ -671,9 +690,10 @@ left-to-right direction in the SVG:
 * **World Y** — preserves spacing/gaps along World Y and lays the wall out
   horizontally in the SVG.
 
-Phase 4 supports straight walls running along World X or World Y. Geometry is
-still read from world-space mesh vertices (`object.matrix_world @ vertex.co`) so
-parented generated planes remain exportable.
+Straight Wall mode supports straight walls running along World X or World Y.
+Geometry is still read from world-space mesh vertices
+(`object.matrix_world @ vertex.co`) so parented generated planes remain
+exportable.
 
 ### Print Groups
 
@@ -723,8 +743,7 @@ geometry, dimensions, or real spacing.
 Before exporting production SVGs, use **Validate Active Group** or **Validate All
 Groups** in the Print Groups section. Validation checks the stored object
 references, confirms the objects still exist and are generated mesh planes, then
-uses the same world-space straight-wall compatibility and direction logic as SVG
-export.
+uses the same world-space geometry logic as the selected **Export Mode**.
 
 Validation reports whether each group is OK, has warnings, or has errors. A
 typical valid result looks like:
@@ -734,16 +753,17 @@ Back Wall: OK - 3 planes, approx 118.11 in wide x 95.87 in high
 ```
 
 Warnings and errors are shown in Blender's report area, printed to the System
-Console, and summarized in the sidebar under **Latest Validation**. Phase 3
-validation is only for same-axis straight-wall export groups. Phase 4 adds
-explicit World X / World Y direction handling, but does not make angled or
-L-shaped groups exportable.
+Console, and summarized in the sidebar under **Latest Validation**. Validation
+messages include the selected export mode and, in Unfold Connected Walls mode,
+the detected segment order. A simple corner may report:
 
-Phase 4 still intentionally does not include L-shape unfolding, angled wall unfolding,
-bleed, crop marks, safe lines, PDF export, Illustrator automation, artboard
-creation, or re-import/apply-art workflows. If the selected planes are not
-approximately coplanar, or if a selected generated mesh is not a rectangular
-straight-wall plane, the export is cancelled with a warning.
+```text
+L Wall: OK - 5 planes, approx 196.85 in wide x 95.87 in high, Unfold Connected Walls, 2 segments detected: World X then World Y
+```
+
+If the selected planes are not valid for the chosen mode, the export is
+cancelled with a warning or error. Unfold mode also warns when it can detect a
+small corner gap between the two segments.
 
 ---
 
@@ -1065,7 +1085,7 @@ Test inside Blender after every meaningful change. Open the System Console
 * [ ] Generated frames carry `bematrix_array_broken_object`,
   `bematrix_source_frame_name`, `bematrix_array_index_1`, `bematrix_array_index_2`.
 
-**Print Layout Export (Phase 4):**
+**Print Layout Export (Phase 5):**
 
 * [ ] Select generated hard-panel objects from one straight wall and export SVG.
 * [ ] Open the SVG in Illustrator and confirm real-world inch dimensions.
@@ -1074,6 +1094,9 @@ Test inside Blender after every meaningful change. Open the System Console
 * [ ] Set Straight Wall Direction to World X and export a wall running along World X.
 * [ ] Set Straight Wall Direction to World Y and export a wall running along World Y.
 * [ ] Set Straight Wall Direction to Auto Detect and confirm validation/export report the resolved direction.
+* [ ] Set Export Mode to Unfold Connected Walls and validate a two-segment World X / World Y corner group.
+* [ ] Export the unfolded corner and confirm the SVG places World X first, then World Y, as one true-size layout.
+* [ ] Confirm Unfold Connected Walls warns for a small corner gap and errors for ambiguous or unsupported geometry.
 * [ ] Create a named Print Group from selected generated planes.
 * [ ] Use Select Group Objects to reselect the saved planes.
 * [ ] Validate Active Group and confirm an OK result for a straight wall.

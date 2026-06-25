@@ -87,7 +87,9 @@ class BEMATRIX_PT_GraphicPanelsPanel(bpy.types.Panel):
 
             export_box = export_body.box()
             export_box.label(text="Export Options")
-            export_box.prop(props, "straight_wall_direction")
+            export_box.prop(props, "print_export_mode")
+            if props.print_export_mode == "STRAIGHT":
+                export_box.prop(props, "straight_wall_direction")
             export_box.operator(
                 "bematrix.export_selected_planes_svg",
                 icon="EXPORT",

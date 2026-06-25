@@ -16,7 +16,7 @@ from mathutils import Vector
 # Human-readable add-on version. Bump this on every meaningful change so the
 # version shown in the sidebar and printed to the console proves Blender loaded
 # the latest file (Blender caches enabled add-ons aggressively).
-ADDON_VERSION = "0.6.6-print-export-ui"
+ADDON_VERSION = "0.6.7-print-export-unfold"
 
 
 # Common BeMatrix frame dimensions from your chart.

@@ -330,6 +330,13 @@ EXPORT_DIRECTION_LABELS = {
     "WORLD_X": "World X",
     "WORLD_Y": "World Y",
 }
+PRINT_EXPORT_MODE_LABELS = {
+    "STRAIGHT": "Straight Wall",
+    "UNFOLD": "Unfold Connected Walls",
+}
+UNFOLD_AXIS_TOLERANCE_DOT = math.cos(math.radians(10.0))
+UNFOLD_CORNER_WARNING_M = 0.025
+UNFOLD_CORNER_MAX_GAP_M = 0.25
 
 
 def meters_to_inches(value_m):
@@ -402,6 +409,39 @@ def _orient_axis_positive(axis):
 
 def _direction_label(direction):
     return EXPORT_DIRECTION_LABELS.get(direction, str(direction))
+
+
+def _print_export_mode_label(export_mode):
+    return PRINT_EXPORT_MODE_LABELS.get(export_mode, str(export_mode))
+
+
+def _axis_vector_for_direction(direction):
+    if direction == "WORLD_Y":
+        return Vector((0.0, 1.0, 0.0))
+    return Vector((1.0, 0.0, 0.0))
+
+
+def _classify_world_wall_direction(normal):
+    """
+    Return the horizontal wall run direction for simple axis-aligned exports.
+
+    A panel whose face normal points mostly along World Y belongs to a wall run
+    along World X. A panel whose normal points mostly along World X belongs to a
+    wall run along World Y. Phase 5 intentionally supports only this simple
+    World X / World Y corner case.
+    """
+    normal = normal.normalized()
+    abs_x = abs(normal.dot(Vector((1.0, 0.0, 0.0))))
+    abs_y = abs(normal.dot(Vector((0.0, 1.0, 0.0))))
+    abs_z = abs(normal.dot(Vector((0.0, 0.0, 1.0))))
+
+    if abs_z > max(abs_x, abs_y):
+        return None
+    if abs_y >= UNFOLD_AXIS_TOLERANCE_DOT and abs_y >= abs_x:
+        return "WORLD_X"
+    if abs_x >= UNFOLD_AXIS_TOLERANCE_DOT and abs_x > abs_y:
+        return "WORLD_Y"
+    return None
 
 
 def _resolve_straight_wall_direction_from_points(world_points, user_setting):
@@ -604,6 +644,255 @@ def _collect_export_plane_data(selected_objects, direction_setting="AUTO"):
     return export_items, None, direction_info
 
 
+def _segment_bounds_2d(segment):
+    direction = segment["direction"]
+    along_index = 0 if direction == "WORLD_X" else 1
+    cross_index = 1 if direction == "WORLD_X" else 0
+    all_points = []
+    for item in segment["items"]:
+        all_points.extend(item["verts"])
+
+    min_along = min(point[along_index] for point in all_points)
+    max_along = max(point[along_index] for point in all_points)
+    cross_center = sum(point[cross_index] for point in all_points) / len(all_points)
+    return min_along, max_along, cross_center
+
+
+def _corner_gap_between_segments(segment_a, segment_b):
+    """
+    Find the nearest pair of World XY endpoints between the two detected runs.
+
+    The unfold order is deterministic (World X then World Y), but the endpoint
+    proximity check catches disconnected or ambiguous corner groups before SVG
+    export makes a misleading flat layout.
+    """
+    min_a, max_a, cross_a = _segment_bounds_2d(segment_a)
+    min_b, max_b, cross_b = _segment_bounds_2d(segment_b)
+
+    if segment_a["direction"] == "WORLD_X":
+        endpoints_a = [
+            Vector((min_a, cross_a, 0.0)),
+            Vector((max_a, cross_a, 0.0)),
+        ]
+    else:
+        endpoints_a = [
+            Vector((cross_a, min_a, 0.0)),
+            Vector((cross_a, max_a, 0.0)),
+        ]
+
+    if segment_b["direction"] == "WORLD_X":
+        endpoints_b = [
+            Vector((min_b, cross_b, 0.0)),
+            Vector((max_b, cross_b, 0.0)),
+        ]
+    else:
+        endpoints_b = [
+            Vector((cross_b, min_b, 0.0)),
+            Vector((cross_b, max_b, 0.0)),
+        ]
+
+    distances = [
+        (endpoint_a - endpoint_b).length
+        for endpoint_a in endpoints_a
+        for endpoint_b in endpoints_b
+    ]
+    return min(distances) if distances else None
+
+
+def _collect_unfold_connected_plane_data(selected_objects):
+    """
+    Validate and flatten a simple two-segment World X / World Y corner group.
+
+    Segment order is intentionally deterministic for this phase: World X first,
+    then World Y. Within each segment, panels sort by their world position along
+    that segment direction, preserving real gaps before the second segment is
+    placed immediately after the first in the unfolded SVG.
+    """
+    candidates = [
+        obj
+        for obj in selected_objects
+        if obj.type == "MESH" and is_generated_panel_object(obj)
+    ]
+
+    mode_info = {
+        "mode": "UNFOLD",
+        "segment_directions": [],
+        "warning": None,
+        "warnings": [],
+        "details": [],
+    }
+
+    if not candidates:
+        return None, "No selected generated mesh planes found.", mode_info
+
+    unsupported = []
+    segments_by_direction = {}
+
+    for obj in candidates:
+        if obj.data is None or not obj.data.vertices or not obj.data.polygons:
+            return None, f"'{obj.name}' has no mesh plane geometry.", mode_info
+
+        world_verts = _world_vertices_for_object(obj)
+        normal = _first_world_polygon_normal(obj, world_verts)
+        if normal is None:
+            return None, f"'{obj.name}' has no valid polygon normal.", mode_info
+
+        plane_distance = normal.dot(world_verts[0])
+        max_local_distance = max(
+            abs(normal.dot(point) - plane_distance) for point in world_verts
+        )
+        if max_local_distance > PLANAR_TOLERANCE_M:
+            return None, f"'{obj.name}' is not a flat plane.", mode_info
+
+        center = Vector((0.0, 0.0, 0.0))
+        for point in world_verts:
+            center += point
+        center /= len(world_verts)
+
+        direction = _classify_world_wall_direction(normal)
+        if direction is None:
+            unsupported.append(obj.name)
+            continue
+
+        segment = segments_by_direction.setdefault(direction, {
+            "direction": direction,
+            "items": [],
+        })
+        segment["items"].append({
+            "object": obj,
+            "verts": world_verts,
+            "normal": normal,
+            "center": center,
+        })
+
+    detected_direction_count = len(segments_by_direction) + len(unsupported)
+    if unsupported:
+        if detected_direction_count > 2:
+            return None, "more than two wall directions detected", mode_info
+        return None, (
+            "could not determine World X / World Y wall direction for: "
+            f"{', '.join(unsupported)}"
+        ), mode_info
+
+    directions = [direction for direction in ("WORLD_X", "WORLD_Y") if direction in segments_by_direction]
+    mode_info["segment_directions"] = directions
+    if len(directions) > 2:
+        return None, "more than two wall directions detected", mode_info
+    if len(directions) != 2:
+        detected = ", ".join(_direction_label(direction) for direction in directions) or "none"
+        return None, (
+            "Unfold Connected Walls requires two perpendicular wall directions; "
+            f"detected {detected}."
+        ), mode_info
+
+    for direction in directions:
+        segment = segments_by_direction[direction]
+        reference = segment["items"][0]
+        reference_normal = reference["normal"]
+        reference_distance = reference_normal.dot(reference["verts"][0])
+
+        for item in segment["items"]:
+            if abs(reference_normal.dot(item["normal"])) < NORMAL_DOT_MIN:
+                return None, (
+                    f"{_direction_label(direction)} segment has bad geometry: "
+                    "planes are not approximately parallel."
+                ), mode_info
+            for point in item["verts"]:
+                if abs(reference_normal.dot(point) - reference_distance) > COPLANAR_TOLERANCE_M:
+                    return None, (
+                        f"{_direction_label(direction)} segment has bad geometry: "
+                        "planes are not approximately coplanar."
+                    ), mode_info
+
+    gap_m = _corner_gap_between_segments(
+        segments_by_direction["WORLD_X"],
+        segments_by_direction["WORLD_Y"],
+    )
+    mode_info["corner_gap_m"] = gap_m
+    if gap_m is None or gap_m > UNFOLD_CORNER_MAX_GAP_M:
+        return None, "could not determine connected wall order", mode_info
+    if gap_m > UNFOLD_CORNER_WARNING_M:
+        warning = f"corner gap detected between segments ({meters_to_inches(gap_m):.2f} in)"
+        mode_info["warning"] = warning
+        mode_info["warnings"].append(warning)
+
+    export_items = []
+    offset_u = 0.0
+    vertical_axis = Vector((0.0, 0.0, 1.0))
+
+    for direction in directions:
+        segment = segments_by_direction[direction]
+        horizontal_axis = _axis_vector_for_direction(direction)
+        segment_min_u = None
+        segment_max_u = None
+
+        projected_items = []
+        for item in segment["items"]:
+            obj = item["object"]
+            projected = [
+                (point.dot(horizontal_axis), point.dot(vertical_axis))
+                for point in item["verts"]
+            ]
+            min_u = min(point[0] for point in projected)
+            max_u = max(point[0] for point in projected)
+            min_v = min(point[1] for point in projected)
+            max_v = max(point[1] for point in projected)
+
+            width_m = max_u - min_u
+            height_m = max_v - min_v
+            if width_m <= 1e-6 or height_m <= 1e-6:
+                return None, f"'{obj.name}' has zero-width or zero-height bounds.", mode_info
+
+            polygon_area_m2 = 0.0
+            for poly in obj.data.polygons:
+                poly_points = [
+                    (
+                        item["verts"][vertex_index].dot(horizontal_axis),
+                        item["verts"][vertex_index].dot(vertical_axis),
+                    )
+                    for vertex_index in poly.vertices
+                ]
+                polygon_area_m2 += _projected_polygon_area(poly_points)
+
+            bounds_area_m2 = width_m * height_m
+            area_ratio = polygon_area_m2 / bounds_area_m2 if bounds_area_m2 > 0 else 0.0
+            if area_ratio < 0.98 or area_ratio > 1.02:
+                return None, (
+                    f"'{obj.name}' is not a rectangular straight-wall plane. "
+                    "Unfold Connected Walls does not support L-shapes, holes, or curved panels."
+                ), mode_info
+
+            segment_min_u = min(min_u, segment_min_u) if segment_min_u is not None else min_u
+            segment_max_u = max(max_u, segment_max_u) if segment_max_u is not None else max_u
+            projected_items.append({
+                "object": obj,
+                "center_u": item["center"].dot(horizontal_axis),
+                "min_u": min_u,
+                "max_u": max_u,
+                "min_v": min_v,
+                "max_v": max_v,
+                "width_in": meters_to_inches(width_m),
+                "height_in": meters_to_inches(height_m),
+                "segment_direction": direction,
+            })
+
+        projected_items.sort(key=lambda item: (item["center_u"], item["object"].name))
+        for item in projected_items:
+            local_min_u = item["min_u"] - segment_min_u
+            local_max_u = item["max_u"] - segment_min_u
+            item["min_u"] = offset_u + local_min_u
+            item["max_u"] = offset_u + local_max_u
+            item["center_u"] = offset_u + (item["center_u"] - segment_min_u)
+            export_items.append(item)
+
+        offset_u += segment_max_u - segment_min_u
+        mode_info["details"].append(
+            f"{_direction_label(direction)} segment: {len(projected_items)} plane(s)"
+        )
+
+    return export_items, None, mode_info
+
+
 def _svg_for_export_items(export_items, print_group_name=None):
     min_u = min(item["min_u"] for item in export_items)
     max_u = max(item["max_u"] for item in export_items)
@@ -678,17 +967,27 @@ def _svg_for_export_items(export_items, print_group_name=None):
     return "\n".join(lines)
 
 
-def export_planes_to_svg(context, objects, filepath, print_group_name=None, direction_setting="AUTO"):
+def export_planes_to_svg(
+    context,
+    objects,
+    filepath,
+    print_group_name=None,
+    direction_setting="AUTO",
+    export_mode="STRAIGHT",
+):
     """
-    Export generated plane objects to SVG using the Phase 1 straight-wall rules.
+    Export generated plane objects to SVG.
 
     Returns (count, error_message). The caller is responsible for Blender
     reports so selected-export and group-export can add context-specific warnings.
     """
-    export_items, error, direction_info = _collect_export_plane_data(
-        objects,
-        direction_setting=direction_setting,
-    )
+    if export_mode == "UNFOLD":
+        export_items, error, direction_info = _collect_unfold_connected_plane_data(objects)
+    else:
+        export_items, error, direction_info = _collect_export_plane_data(
+            objects,
+            direction_setting=direction_setting,
+        )
     if error:
         return 0, error, direction_info
 
@@ -795,6 +1094,12 @@ def _summarize_export_items(export_items):
 def _direction_summary(direction_info):
     if not direction_info:
         return "direction unknown"
+    if direction_info.get("mode") == "UNFOLD":
+        directions = direction_info.get("segment_directions") or []
+        if directions:
+            labels = " then ".join(_direction_label(direction) for direction in directions)
+            return f"2 segments detected: {labels}"
+        return "segments unknown"
     setting = direction_info.get("setting")
     resolved = direction_info.get("resolved")
     if setting == "AUTO":
@@ -802,8 +1107,29 @@ def _direction_summary(direction_info):
     return f"direction {_direction_label(resolved)}"
 
 
-def _validate_print_group(group, direction_setting="AUTO"):
+def _export_info_warning(direction_info):
+    if not direction_info:
+        return None
+    warning = direction_info.get("warning")
+    if warning:
+        return warning
+    warnings = direction_info.get("warnings")
+    if warnings:
+        return " ".join(warnings)
+    return None
+
+
+def _export_info_report_label(direction_info, export_mode):
+    if export_mode == "UNFOLD":
+        return f"{_print_export_mode_label(export_mode)}, {_direction_summary(direction_info)}"
+    if direction_info and direction_info.get("resolved"):
+        return _direction_label(direction_info["resolved"])
+    return _print_export_mode_label(export_mode)
+
+
+def _validate_print_group(group, direction_setting="AUTO", export_mode="STRAIGHT"):
     group_name = group.group_name.strip() or "Print Group"
+    mode_label = _print_export_mode_label(export_mode)
     object_names = [
         item.object_name
         for item in group.objects
@@ -814,7 +1140,7 @@ def _validate_print_group(group, direction_setting="AUTO"):
         return {
             "severity": "ERROR",
             "group_name": group_name,
-            "line": f"{group_name}: ERROR - No objects stored in Print Group.",
+            "line": f"{group_name}: ERROR - {mode_label}, No objects stored in Print Group.",
             "details": [],
         }
 
@@ -832,7 +1158,7 @@ def _validate_print_group(group, direction_setting="AUTO"):
             return {
                 "severity": "ERROR",
                 "group_name": group_name,
-                "line": f"{group_name}: ERROR - Missing object: {object_name}",
+                "line": f"{group_name}: ERROR - {mode_label}, Missing object: {object_name}",
                 "details": details,
             }
 
@@ -840,7 +1166,7 @@ def _validate_print_group(group, direction_setting="AUTO"):
             return {
                 "severity": "ERROR",
                 "group_name": group_name,
-                "line": f"{group_name}: ERROR - Object is not a mesh: {object_name}",
+                "line": f"{group_name}: ERROR - {mode_label}, Object is not a mesh: {object_name}",
                 "details": details,
             }
 
@@ -848,7 +1174,7 @@ def _validate_print_group(group, direction_setting="AUTO"):
             return {
                 "severity": "ERROR",
                 "group_name": group_name,
-                "line": f"{group_name}: ERROR - Object is not a generated BeMatrix panel/SEG plane: {object_name}",
+                "line": f"{group_name}: ERROR - {mode_label}, Object is not a generated BeMatrix panel/SEG plane: {object_name}",
                 "details": details,
             }
 
@@ -856,21 +1182,27 @@ def _validate_print_group(group, direction_setting="AUTO"):
             return {
                 "severity": "ERROR",
                 "group_name": group_name,
-                "line": f"{group_name}: ERROR - Object has no usable mesh geometry: {object_name}",
+                "line": f"{group_name}: ERROR - {mode_label}, Object has no usable mesh geometry: {object_name}",
                 "details": details,
             }
 
         objects.append(obj)
 
-    export_items, error, direction_info = _collect_export_plane_data(
-        objects,
-        direction_setting=direction_setting,
-    )
+    if export_mode == "UNFOLD":
+        export_items, error, direction_info = _collect_unfold_connected_plane_data(objects)
+    else:
+        export_items, error, direction_info = _collect_export_plane_data(
+            objects,
+            direction_setting=direction_setting,
+        )
     if error:
         return {
             "severity": "ERROR",
             "group_name": group_name,
-            "line": f"{group_name}: ERROR - {error}; {_direction_summary(direction_info)}",
+            "line": (
+                f"{group_name}: ERROR - {mode_label}, "
+                f"{error}; {_direction_summary(direction_info)}"
+            ),
             "details": details,
             "direction_info": direction_info,
         }
@@ -878,16 +1210,18 @@ def _validate_print_group(group, direction_setting="AUTO"):
     total_width_in, total_height_in = _summarize_export_items(export_items)
     panel_heights = [item["height_in"] for item in export_items]
     warnings = []
-    if direction_info and direction_info.get("warning"):
-        warnings.append(direction_info["warning"])
+    info_warning = _export_info_warning(direction_info)
+    if info_warning:
+        warnings.append(info_warning)
     if panel_heights and (max(panel_heights) - min(panel_heights)) > 0.125:
         warnings.append("Plane heights differ.")
 
+    mode_summary = f"{mode_label}, {_direction_summary(direction_info)}"
     if warnings:
         line = (
             f"{group_name}: WARNING - {len(export_items)} planes, approx "
             f"{total_width_in:.2f} in wide x {total_height_in:.2f} in high, "
-            f"{_direction_summary(direction_info)}; "
+            f"{mode_summary}; "
             f"{' '.join(warnings)}"
         )
         severity = "WARNING"
@@ -895,7 +1229,7 @@ def _validate_print_group(group, direction_setting="AUTO"):
         line = (
             f"{group_name}: OK - {len(export_items)} planes, approx "
             f"{total_width_in:.2f} in wide x {total_height_in:.2f} in high, "
-            f"{_direction_summary(direction_info)}"
+            f"{mode_summary}"
         )
         severity = "OK"
 
@@ -903,7 +1237,7 @@ def _validate_print_group(group, direction_setting="AUTO"):
         "severity": severity,
         "group_name": group_name,
         "line": line,
-        "details": details + warnings,
+        "details": details + (direction_info.get("details", []) if direction_info else []) + warnings,
         "direction_info": direction_info,
     }
 
@@ -917,7 +1251,7 @@ class BEMATRIX_OT_ExportSelectedPlanesToSVG(bpy.types.Operator, ExportHelper):
     bl_label = "Export Selected Planes to SVG"
     bl_description = (
         "Export selected generated hard-panel or SEG plane objects as a "
-        "true-size straight-wall SVG layout"
+        "true-size SVG using the selected Print Layout Export mode"
     )
     bl_options = {"REGISTER"}
 
@@ -934,24 +1268,26 @@ class BEMATRIX_OT_ExportSelectedPlanesToSVG(bpy.types.Operator, ExportHelper):
             context.selected_objects,
             self.filepath,
             direction_setting=props.straight_wall_direction,
+            export_mode=props.print_export_mode,
         )
         if error is not None:
             self.report({"ERROR"}, error)
             return {"CANCELLED"}
 
-        if direction_info.get("warning"):
+        report_label = _export_info_report_label(direction_info, props.print_export_mode)
+        info_warning = _export_info_warning(direction_info)
+        if info_warning:
             self.report(
                 {"WARNING"},
                 f"Exported {count} selected plane(s) using "
-                f"{_direction_label(direction_info['resolved'])}; "
-                f"{direction_info['warning']}",
+                f"{report_label}; {info_warning}",
             )
             return {"FINISHED"}
 
         self.report(
             {"INFO"},
             f"Exported {count} selected plane(s) to SVG using "
-            f"{_direction_label(direction_info['resolved'])}.",
+            f"{report_label}.",
         )
         return {"FINISHED"}
 
@@ -1039,7 +1375,7 @@ class BEMATRIX_OT_SelectPrintGroupObjects(bpy.types.Operator):
 class BEMATRIX_OT_ValidateActivePrintGroup(bpy.types.Operator):
     bl_idname = "bematrix.validate_active_print_group"
     bl_label = "Validate Active Group"
-    bl_description = "Check whether the active Print Group is safe for straight-wall SVG export"
+    bl_description = "Check whether the active Print Group is safe for the selected SVG export mode"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -1054,10 +1390,13 @@ class BEMATRIX_OT_ValidateActivePrintGroup(bpy.types.Operator):
         result = _validate_print_group(
             group,
             direction_setting=props.straight_wall_direction,
+            export_mode=props.print_export_mode,
         )
         _set_validation_status(props, [result["line"]])
         print("\n=== BeMatrix Print Group Validation ===")
-        print(f"Direction setting: {_direction_label(props.straight_wall_direction)}")
+        print(f"Export mode: {_print_export_mode_label(props.print_export_mode)}")
+        if props.print_export_mode == "STRAIGHT":
+            print(f"Direction setting: {_direction_label(props.straight_wall_direction)}")
         print(result["line"])
         for detail in result["details"]:
             print(f"  {detail}")
@@ -1076,7 +1415,7 @@ class BEMATRIX_OT_ValidateActivePrintGroup(bpy.types.Operator):
 class BEMATRIX_OT_ValidateAllPrintGroups(bpy.types.Operator):
     bl_idname = "bematrix.validate_all_print_groups"
     bl_label = "Validate All Groups"
-    bl_description = "Check every saved Print Group for straight-wall SVG export compatibility"
+    bl_description = "Check every saved Print Group for the selected SVG export mode"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -1093,11 +1432,14 @@ class BEMATRIX_OT_ValidateAllPrintGroups(bpy.types.Operator):
         lines = []
 
         print("\n=== BeMatrix Print Group Validation ===")
-        print(f"Direction setting: {_direction_label(props.straight_wall_direction)}")
+        print(f"Export mode: {_print_export_mode_label(props.print_export_mode)}")
+        if props.print_export_mode == "STRAIGHT":
+            print(f"Direction setting: {_direction_label(props.straight_wall_direction)}")
         for group in props.print_groups:
             result = _validate_print_group(
                 group,
                 direction_setting=props.straight_wall_direction,
+                export_mode=props.print_export_mode,
             )
             lines.append(result["line"])
             print(result["line"])
@@ -1135,7 +1477,7 @@ def _directory_path_from_operator(operator):
     return os.path.abspath(directory)
 
 
-def _export_print_group_to_folder(group, folder_path, direction_setting="AUTO"):
+def _export_print_group_to_folder(group, folder_path, direction_setting="AUTO", export_mode="STRAIGHT"):
     group_name = group.group_name.strip() or "Print Group"
     filepath = os.path.join(folder_path, sanitize_svg_filename(group_name))
     objects, missing, invalid = _resolve_print_group_objects(group)
@@ -1157,6 +1499,7 @@ def _export_print_group_to_folder(group, folder_path, direction_setting="AUTO"):
         filepath,
         print_group_name=group_name,
         direction_setting=direction_setting,
+        export_mode=export_mode,
     )
     if error is not None:
         return {
@@ -1179,6 +1522,7 @@ def _export_print_group_to_folder(group, folder_path, direction_setting="AUTO"):
         "invalid": invalid,
         "error": None,
         "direction_info": direction_info,
+        "export_mode": export_mode,
     }
 
 
@@ -1218,6 +1562,7 @@ class BEMATRIX_OT_ExportActivePrintGroupToFolder(bpy.types.Operator):
             group,
             folder_path,
             direction_setting=props.straight_wall_direction,
+            export_mode=props.print_export_mode,
         )
         if not result["ok"]:
             self.report(
@@ -1226,21 +1571,21 @@ class BEMATRIX_OT_ExportActivePrintGroupToFolder(bpy.types.Operator):
             )
             return {"CANCELLED"}
 
-        direction_label = _direction_label(result["direction_info"]["resolved"])
-        direction_warning = result["direction_info"].get("warning")
-        if result["missing"] or result["invalid"] or direction_warning:
-            extra_warning = f" {direction_warning}" if direction_warning else ""
+        report_label = _export_info_report_label(result["direction_info"], props.print_export_mode)
+        info_warning = _export_info_warning(result["direction_info"])
+        if result["missing"] or result["invalid"] or info_warning:
+            extra_warning = f" {info_warning}" if info_warning else ""
             self.report(
                 {"WARNING"},
                 f"Exported '{result['group_name']}' with {result['count']} plane(s); "
-                f"used {direction_label}; "
+                f"used {report_label}; "
                 f"skipped {len(result['missing'])} missing and "
                 f"{len(result['invalid'])} invalid.{extra_warning}",
             )
         else:
             self.report(
                 {"INFO"},
-                f"Exported '{result['group_name']}' to {result['filepath']} using {direction_label}.",
+                f"Exported '{result['group_name']}' to {result['filepath']} using {report_label}.",
             )
 
         return {"FINISHED"}
@@ -1283,29 +1628,36 @@ class BEMATRIX_OT_ExportAllPrintGroupsToFolder(bpy.types.Operator):
 
         print("\n=== BeMatrix Print Group Batch SVG Export ===")
         print(f"Output folder: {folder_path}")
-        print(f"Direction setting: {_direction_label(props.straight_wall_direction)}")
+        print(f"Export mode: {_print_export_mode_label(props.print_export_mode)}")
+        if props.print_export_mode == "STRAIGHT":
+            print(f"Direction setting: {_direction_label(props.straight_wall_direction)}")
 
         for group in props.print_groups:
             result = _export_print_group_to_folder(
                 group,
                 folder_path,
                 direction_setting=props.straight_wall_direction,
+                export_mode=props.print_export_mode,
             )
             if result["ok"]:
                 exported += 1
                 if (
                     result["missing"]
                     or result["invalid"]
-                    or result["direction_info"].get("warning")
+                    or _export_info_warning(result["direction_info"])
                 ):
                     warning_groups += 1
-                direction_label = _direction_label(result["direction_info"]["resolved"])
+                report_label = _export_info_report_label(
+                    result["direction_info"],
+                    props.print_export_mode,
+                )
                 warning_text = ""
-                if result["direction_info"].get("warning"):
-                    warning_text = f", {result['direction_info']['warning']}"
+                info_warning = _export_info_warning(result["direction_info"])
+                if info_warning:
+                    warning_text = f", {info_warning}"
                 print(
                     f"  OK: {result['group_name']} -> {result['filepath']} "
-                    f"using {direction_label} ({result['count']} plane(s), "
+                    f"using {report_label} ({result['count']} plane(s), "
                     f"{len(result['missing'])} missing, {len(result['invalid'])} invalid"
                     f"{warning_text})"
                 )
