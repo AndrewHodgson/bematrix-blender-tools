@@ -14,7 +14,9 @@ def _print_group_items(self, context):
     items = []
     for index, group in enumerate(self.print_groups):
         count = len(group.objects)
-        label = group.group_name or f"Print Group {index + 1}"
+        group_name = group.group_name or f"Print Group {index + 1}"
+        group_abbr = group.group_abbreviation.strip()
+        label = f"{group_abbr} - {group_name}" if group_abbr else group_name
         items.append((str(index), label, f"{count} stored object(s)"))
 
     if not items:
@@ -32,10 +34,27 @@ class BEMATRIX_PrintGroupObjectItem(bpy.types.PropertyGroup):
 
 
 class BEMATRIX_PrintGroup(bpy.types.PropertyGroup):
+    group_abbreviation: bpy.props.StringProperty(
+        name="Group Abbreviation",
+        description="Short stable code for this Print Group, such as BW, RW, CF, or SEG1",
+        default="",
+    )
+
     group_name: bpy.props.StringProperty(
         name="Group Name",
         description="Saved Print Group name",
         default="",
+    )
+
+    export_mode: bpy.props.EnumProperty(
+        name="Export Mode",
+        description="SVG export mode for this Print Group",
+        items=[
+            ("AUTO", "Auto Detect", "Resolve straight wall or simple L-shape during validation/export"),
+            ("STRAIGHT", "Straight Wall", "Export one straight, coplanar wall layout"),
+            ("UNFOLD", "Unfold Connected Walls", "Export a simple connected World X / World Y corner as one flat SVG"),
+        ],
+        default="AUTO",
     )
 
     objects: bpy.props.CollectionProperty(
@@ -166,6 +185,89 @@ class BEMATRIX_PanelProperties(bpy.types.PropertyGroup):
             ("WORLD_Y", "World Y", "Use World Y as the left-to-right wall/export direction"),
         ],
         default="AUTO",
+    )
+
+    illustrator_template_scale: bpy.props.EnumProperty(
+        name="Illustrator Template Scale",
+        description="Scale used for SVG templates, manifests, and Illustrator artboards",
+        items=[
+            ("1.0", "Full Size 1:1", "Export templates at full real-world size"),
+            ("0.5", "50%", "Export templates at half size"),
+            ("0.25", "25%", "Export templates at quarter size"),
+            ("0.1", "10%", "Export templates at ten percent size"),
+        ],
+        default="0.1",
+    )
+
+    illustrator_artboard_naming: bpy.props.EnumProperty(
+        name="Artboard Naming",
+        description="Naming pattern used for manifest artboard_name and Illustrator JSX artboards",
+        items=[
+            ("GRAPHIC_ID", "Graphic ID only", "Use the generated Graphic ID, such as LWT01"),
+            ("GROUP_NAME_NUMBER", "Group Name + Number", "Use group name and panel number, such as L_Wall_Test_01"),
+            ("ABBR_GROUP_NAME_NUMBER", "Abbreviation + Group Name + Number", "Use abbreviation, group name, and panel number, such as LWT_L_Wall_Test_01"),
+        ],
+        default="ABBR_GROUP_NAME_NUMBER",
+    )
+
+    include_print_group_title: bpy.props.BoolProperty(
+        name="Include Print Group Title",
+        description="Include the Print Group title text in exported SVG files",
+        default=True,
+    )
+
+    include_panel_labels: bpy.props.BoolProperty(
+        name="Include Panel Labels",
+        description="Include production panel labels in exported SVG files",
+        default=True,
+    )
+
+    include_artboard_guides: bpy.props.BoolProperty(
+        name="Include Artboard Guides",
+        description="Include separate guide rectangles matching each panel for Illustrator artboards",
+        default=True,
+    )
+
+    include_illustrator_artboard_script: bpy.props.BoolProperty(
+        name="Include Illustrator Artboard Script",
+        description="Write matching JSX files for named Illustrator artboards during Print Group folder export",
+        default=True,
+    )
+
+    show_print_groups_section: bpy.props.BoolProperty(
+        name="Show Print Groups",
+        description="Expand the Print Groups controls in the Print Layout Export section",
+        default=False,
+    )
+
+    show_export_options_section: bpy.props.BoolProperty(
+        name="Show Export Options",
+        description="Expand the SVG export controls in the Print Layout Export section",
+        default=False,
+    )
+
+    show_validation_options_section: bpy.props.BoolProperty(
+        name="Show Validation Options",
+        description="Expand the validation controls in the Print Layout Export section",
+        default=False,
+    )
+
+    show_artwork_images_section: bpy.props.BoolProperty(
+        name="Show Artwork Images",
+        description="Expand the artwork image import controls in the Print Layout Export section",
+        default=False,
+    )
+
+    apply_artwork_active_group_only: bpy.props.BoolProperty(
+        name="Apply to Active Group Only",
+        description="Only match artwork images to objects stored in the active Print Group",
+        default=True,
+    )
+
+    artwork_apply_status: bpy.props.StringProperty(
+        name="Artwork Apply Status",
+        description="Latest artwork image apply result",
+        default="No artwork applied yet.",
     )
 
     print_group_validation_status: bpy.props.StringProperty(

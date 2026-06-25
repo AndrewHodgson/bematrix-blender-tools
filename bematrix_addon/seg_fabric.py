@@ -148,6 +148,21 @@ def create_smart_seg_panel(context, frames, side_label, side_offset_mm,
         info["error"] = "no valid frame cells"
         return None, info
 
+    expected_seg_width_mm = None
+    expected_seg_height_mm = None
+    if len(frame_data) == 1:
+        _frame_obj, (w_mm, h_mm), positions = frame_data[0]
+        xs = []
+        zs = []
+        for _i1, _i2, offset in positions:
+            offset_x_mm = offset.x * 1000.0
+            offset_z_mm = offset.z * 1000.0
+            xs.extend((offset_x_mm - (w_mm / 2.0), offset_x_mm + (w_mm / 2.0)))
+            zs.extend((offset_z_mm - (h_mm / 2.0), offset_z_mm + (h_mm / 2.0)))
+        if xs and zs:
+            expected_seg_width_mm = max(xs) - min(xs)
+            expected_seg_height_mm = max(zs) - min(zs)
+
     centroid = Vector((0.0, 0.0, 0.0))
     for c in centers:
         centroid += c
@@ -443,12 +458,29 @@ def create_smart_seg_panel(context, frames, side_label, side_offset_mm,
     obj["bematrix_seg_mitre_count"] = corner_count
     obj["bematrix_y_offset_mm"] = side_offset_mm
     obj["bematrix_parent_frame"] = main_frame.name
+    if expected_seg_width_mm is not None and expected_seg_height_mm is not None:
+        obj["bematrix_seg_width_mm"] = expected_seg_width_mm
+        obj["bematrix_seg_height_mm"] = expected_seg_height_mm
 
     dims = tuple(round(v, 4) for v in obj.dimensions)
     print(
         f"  -> object '{obj.name}': faces={len(faces)} sections={len(groups)} "
         f"mitres={corner_count} verts={len(verts)} dims(local m)={dims}"
     )
+    if expected_seg_width_mm is not None and expected_seg_height_mm is not None:
+        measured_w_m = max((v[0] for v in obj.bound_box), default=0.0) - min(
+            (v[0] for v in obj.bound_box), default=0.0
+        )
+        measured_h_m = max((v[2] for v in obj.bound_box), default=0.0) - min(
+            (v[2] for v in obj.bound_box), default=0.0
+        )
+        print(
+            "  "
+            + f"SEG Fabric {side_label}: expected "
+            + f"{expected_seg_width_mm:g} x {expected_seg_height_mm:g} mm, "
+            + f"mesh local approx {measured_w_m * 1000.0:.3f} x "
+            + f"{measured_h_m * 1000.0:.3f} mm"
+        )
 
     info["quad_count"] = len(faces)
     info["vert_count"] = len(verts)
@@ -458,6 +490,8 @@ def create_smart_seg_panel(context, frames, side_label, side_offset_mm,
     info["object"] = obj.name
     info["material"] = seg_mat.name
     info["main_frame"] = main_frame.name
+    info["seg_width_mm"] = expected_seg_width_mm
+    info["seg_height_mm"] = expected_seg_height_mm
     return obj, info
 
 

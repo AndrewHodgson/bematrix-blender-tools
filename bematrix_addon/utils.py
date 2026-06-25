@@ -16,7 +16,7 @@ from mathutils import Vector
 # Human-readable add-on version. Bump this on every meaningful change so the
 # version shown in the sidebar and printed to the console proves Blender loaded
 # the latest file (Blender caches enabled add-ons aggressively).
-ADDON_VERSION = "0.6.7-print-export-unfold"
+ADDON_VERSION = "0.8.2-dimension-calibration"
 
 
 # Common BeMatrix frame dimensions from your chart.
@@ -34,6 +34,19 @@ BEMATRIX_FRAME_SIZES_MM = [
     2976,
 ]
 
+BEMATRIX_DIMENSION_TABLE_MM = {
+    434: {"frame": 434, "infill": 428, "inside": 303},
+    496: {"frame": 496, "infill": 490, "inside": 365},
+    744: {"frame": 744, "infill": 738, "inside": 613},
+    992: {"frame": 992, "infill": 986, "inside": 861},
+    1426: {"frame": 1426, "infill": 1420, "inside": 1295},
+    1488: {"frame": 1488, "infill": 1482, "inside": 1357},
+    1984: {"frame": 1984, "infill": 1978, "inside": 1853},
+    2418: {"frame": 2418, "infill": 2412, "inside": 2287},
+    2480: {"frame": 2480, "infill": 2474, "inside": 2349},
+    2976: {"frame": 2976, "infill": 2970, "inside": 2845},
+}
+
 
 # Each generated panel gets its own material named MATERIAL_PREFIX + panel name
 # (spaces -> underscores), e.g. MAT_BM_PANEL_FRONT_B62_0992_0992_A001.
@@ -45,6 +58,67 @@ GENERATED_ARRAY_PREFIX = "BM_SYNC_ARRAY_"
 
 def mm_to_m(value_mm: float) -> float:
     return value_mm / 1000.0
+
+
+def get_frame_dimension_mm(code):
+    """Return an official BeMatrix frame dimension F in mm, or None."""
+    try:
+        value = int(round(float(code)))
+    except (TypeError, ValueError):
+        return None
+    if value in BEMATRIX_DIMENSION_TABLE_MM:
+        return BEMATRIX_DIMENSION_TABLE_MM[value]["frame"]
+    return None
+
+
+def get_infill_panel_dimension_mm(frame_dimension_mm, fallback_trim_mm=6.0):
+    """
+    Return official BeMatrix hard infill panel dimension P for frame F.
+
+    If the frame dimension is not in the official table, fall back to the legacy
+    trim behavior so custom/unknown frames continue to work.
+    """
+    frame = get_frame_dimension_mm(frame_dimension_mm)
+    if frame is not None:
+        return BEMATRIX_DIMENSION_TABLE_MM[frame]["infill"]
+    try:
+        return float(frame_dimension_mm) - float(fallback_trim_mm)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_inside_frame_dimension_mm(frame_dimension_mm):
+    """Return official BeMatrix inside frame dimension I in mm, or None."""
+    frame = get_frame_dimension_mm(frame_dimension_mm)
+    if frame is not None:
+        return BEMATRIX_DIMENSION_TABLE_MM[frame]["inside"]
+    return None
+
+
+def get_hard_panel_size_mm(frame_width_mm, frame_height_mm, fallback_trim_mm=6.0):
+    """
+    Hard-panel size from the official F -> P lookup table.
+
+    This preserves the old configurable-trim fallback for dimensions that are
+    not present in the BeMatrix table.
+    """
+    return (
+        get_infill_panel_dimension_mm(frame_width_mm, fallback_trim_mm),
+        get_infill_panel_dimension_mm(frame_height_mm, fallback_trim_mm),
+    )
+
+
+def format_dimension_validation(label, expected_w_mm, expected_h_mm,
+                                actual_w_mm, actual_h_mm, tolerance_mm=0.25):
+    """Readable OK/WARNING line for console validation output."""
+    dw = abs(float(actual_w_mm) - float(expected_w_mm))
+    dh = abs(float(actual_h_mm) - float(expected_h_mm))
+    status = "OK" if dw <= tolerance_mm and dh <= tolerance_mm else "WARNING"
+    return (
+        f"{label}: {status} - expected "
+        f"{expected_w_mm:g} x {expected_h_mm:g} mm, actual "
+        f"{actual_w_mm:.3f} x {actual_h_mm:.3f} mm"
+    )
 
 
 def strip_blender_duplicate_suffix(name: str) -> str:

@@ -21,7 +21,7 @@ unregister order is reversed.
 bl_info = {
     "name": "BeMatrix Graphic Panels",
     "author": "Andrew Hodgson / ChatGPT",
-    "version": (0, 6, 7),
+    "version": (0, 8, 2),
     "blender": (5, 1, 0),
     "location": "View3D > Sidebar > BeMatrix > Graphic Panels",
     "description": "Add correctly sized graphic panel planes to selected BeMatrix frames.",
@@ -76,9 +76,11 @@ from .operators import (
     BEMATRIX_OT_DeleteGeneratedPanels,
     BEMATRIX_OT_ExportSelectedPlanesToSVG,
     BEMATRIX_OT_CreatePrintGroupFromSelected,
+    BEMATRIX_OT_GeneratePrintGroupGraphicIDs,
     BEMATRIX_OT_SelectPrintGroupObjects,
     BEMATRIX_OT_ValidateActivePrintGroup,
     BEMATRIX_OT_ValidateAllPrintGroups,
+    BEMATRIX_OT_ApplyArtworkFromFolder,
     BEMATRIX_OT_ExportActivePrintGroupToFolder,
     BEMATRIX_OT_ExportAllPrintGroupsToFolder,
     BEMATRIX_OT_DeletePrintGroup,
@@ -87,7 +89,13 @@ from .operators import (
     BEMATRIX_OT_SnapFrameToTarget,
     BEMATRIX_OT_MakeSelectedLocal,
 )
-from .ui import BEMATRIX_PT_GraphicPanelsPanel
+from .ui import (
+    BEMATRIX_PT_GraphicPanelsPanel,
+    BEMATRIX_PT_GraphicPanelsSection,
+    BEMATRIX_PT_PrintLayoutExportSection,
+    BEMATRIX_PT_UtilitiesSection,
+    BEMATRIX_PT_FrameTransformSection,
+)
 
 
 # Nested PropertyGroups first, then the main PropertyGroup, operators, and panel.
@@ -100,9 +108,11 @@ classes = (
     BEMATRIX_OT_DeleteGeneratedPanels,
     BEMATRIX_OT_ExportSelectedPlanesToSVG,
     BEMATRIX_OT_CreatePrintGroupFromSelected,
+    BEMATRIX_OT_GeneratePrintGroupGraphicIDs,
     BEMATRIX_OT_SelectPrintGroupObjects,
     BEMATRIX_OT_ValidateActivePrintGroup,
     BEMATRIX_OT_ValidateAllPrintGroups,
+    BEMATRIX_OT_ApplyArtworkFromFolder,
     BEMATRIX_OT_ExportActivePrintGroupToFolder,
     BEMATRIX_OT_ExportAllPrintGroupsToFolder,
     BEMATRIX_OT_DeletePrintGroup,
@@ -111,6 +121,10 @@ classes = (
     BEMATRIX_OT_SnapFrameToTarget,
     BEMATRIX_OT_MakeSelectedLocal,
     BEMATRIX_PT_GraphicPanelsPanel,
+    BEMATRIX_PT_GraphicPanelsSection,
+    BEMATRIX_PT_PrintLayoutExportSection,
+    BEMATRIX_PT_UtilitiesSection,
+    BEMATRIX_PT_FrameTransformSection,
 )
 
 

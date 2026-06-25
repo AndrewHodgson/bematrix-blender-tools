@@ -6,7 +6,7 @@ The first tool in this plugin is the **Graphic Panels** tool. It creates correct
 
 ## Current Status
 
-Version: `0.6.7-print-export-unfold`
+Version: `0.8.2-dimension-calibration`
 Blender target: `5.1.0`
 Primary feature: Add/update graphic panel planes on BeMatrix frames.
 Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
@@ -23,7 +23,7 @@ Packaging: multi-file add-on package in the `bematrix_addon/` folder (see
 | Front / back / both-side placement | ✅ Working |
 | Unique per-panel materials | ✅ Working |
 | Duplicate prevention / update-in-place | ✅ Working |
-| Print Layout Export: selected / grouped SVG, validation, simple L-wall unfold | Phase 5 |
+| Print Layout Export: grouped SVG, per-group export modes, validation, simple L-wall unfold, Illustrator guide groups, Graphic IDs, project manifest, metadata JSON, Illustrator artboard script | Phase 7 project export |
 | Utility: Convert Array to Individual Frames | ✅ Working |
 | **SEG fabric (Smart SEG)** | ✅ Working — one connected mesh across selected frames |
 | Frame Transform: vertex-to-vertex snap | ✅ Working |
@@ -38,13 +38,13 @@ Blender caches enabled add-ons, so an old copy can keep running after you edit
 the package. To confirm the latest code is active:
 
 1. The version label is shown at the top of **View3D > Sidebar > BeMatrix >
-   Graphic Panels** (e.g. `Version: 0.6.7-print-export-unfold`).
+   Graphic Panels** (e.g. `Version: 0.8.2-dimension-calibration`).
 2. When you click **Add / Update Graphic Panels**, the System Console prints the
    add-on version and the full loaded file path (this path points at a module
    inside the installed `bematrix_addon/` package, e.g. `.../operators.py`).
 
 If the version label or console version does not match the files you just edited,
-build a fresh ZIP and use **Update Add-on from ZIP** in the BeMatrix sidebar.
+build a fresh ZIP and use **Update** in the BeMatrix sidebar.
 Restart Blender if new panels, operators, or UI changes still do not appear.
 
 ### Modifier Debug Dump
@@ -75,8 +75,9 @@ The Graphic Panels tool can:
 * Use real-world millimeter dimensions converted to Blender meters.
 * Generate real `_A001`, `_A002`, etc. panel objects for frames with one simple Array modifier.
 * Generate a grid of `_A###_B###` panel objects for frames with two stacked Array modifiers.
-* Export selected generated hard-panel or SEG plane objects as a true-size SVG
-  layout for Illustrator (Phase 1: straight walls only).
+* Export selected/generated hard-panel or SEG plane objects as a true-size SVG
+  layout for Illustrator, including straight walls and simple two-segment
+  unfolded corner groups.
 * Generate **Smart SEG Fabric**: one connected fabric mesh that follows only the selected frames (one quad per frame, shared edges, empty cells left empty, real-world UVs).
 
 ---
@@ -193,7 +194,7 @@ dist/
 Example output:
 
 ```text
-dist/bematrix_blender_tools_v0.6.7.zip
+dist/bematrix_blender_tools_v0.8.2.zip
 ```
 
 The ZIP contains the correct top-level add-on folder:
@@ -258,7 +259,7 @@ manually uninstalling and reinstalling:
    View3D > Sidebar > BeMatrix
    ```
 
-3. Under the visible version number, click **Update Add-on from ZIP**.
+3. Beside the visible version number, click **Update**.
 4. Choose the ZIP from `dist/`.
 
 The updater installs the selected ZIP over the existing add-on with overwrite
@@ -651,36 +652,307 @@ Use it for straight-wall layouts or simple two-segment corner unfolds:
 
 1. Select the generated panel/SEG plane objects to export.
 2. Open **View3D Sidebar > BeMatrix > Print Layout Export**.
-3. Choose an **Export Mode**.
-4. Click **Export Selected Planes to SVG** and choose a `.svg` filepath.
+3. Create or select a **Print Group**.
+4. Set that Print Group's **Export Mode** to **Auto Detect**, **Straight Wall**,
+   or **Unfold Connected Walls**.
+5. Expand **Export Options**, then click **Export Active** or **Export All**.
 
 The SVG is true-size, uses inches as the document unit, and preserves the real
 world spacing/gaps between the selected planes based on their world-space mesh
 vertices. Each exported plane becomes an editable SVG rectangle with a text label
 showing the object name plus width and height in inches.
 
+### Export Options
+
+The **Export Options** section controls both selected-plane export and Print
+Group folder export:
+
+* **Include Print Group Title** adds the Print Group name above the layout.
+  Selected-plane exports do not have a Print Group name, so this option only
+  affects saved Print Groups.
+* **Include Panel Labels** adds production labels to each panel. Labels include
+  the Graphic ID when available, the Print Group display name, the Blender object
+  name, the true-size dimensions, and the selected Illustrator template scale:
+
+  ```text
+  BW01
+  Back Wall
+  Object: BM_PANEL_FRONT_B62 0992 2418
+  Real: 38.82 in x 94.96 in
+  Scale: 10%
+  ```
+
+* **Include Artboard Guides** adds a separate guide rectangle for each panel.
+  Each guide exactly matches the panel rectangle's exported size and position.
+* **Include Illustrator Artboard Script** writes a matching JSX file during
+  **Export Active** and **Export All**:
+
+  ```text
+  Project_Graphics_Export/
+    SVG/BW_Back_Wall.svg
+    Illustrator/BW_Back_Wall_artboards.jsx
+    Metadata/Project_manifest.csv
+    Metadata/bematrix_export.json
+  ```
+
+  `Project_manifest.csv` records the exported panel bounds, Graphic IDs,
+  artboard names, SVG filename, JSX filename, real-size coordinates, and
+  template-scale coordinates. `bematrix_export.json` records project-level and
+  print-group-level metadata for the separate Illustrator Script Panel. The JSX
+  script can be run in Illustrator to create correctly named artboards from
+  those same template-scale bounds.
+
+* **Illustrator Template Scale** controls the size of the exported Illustrator
+  working template:
+
+  ```text
+  Full Size 1:1
+  50%
+  25%
+  10%
+  ```
+
+  The default is **10%**, which is recommended for render/mockup workflows and
+  large exhibit graphics that may exceed Illustrator's normal canvas/artboard
+  limits at full size. SVG panel rectangles, artboard guide rectangles, manifest
+  template coordinates, and JSX artboards use the selected scale. Real-world
+  dimensions are still preserved in labels and manifest data.
+
+* **Artboard Naming** controls the `artboard_name` written to the manifest and
+  used by the generated Illustrator JSX:
+
+  ```text
+  Graphic ID only                 -> LWT01
+  Group Name + Number             -> L_Wall_Test_01
+  Abbreviation + Group Name + Number -> LWT_L_Wall_Test_01
+  ```
+
+  The default is **Abbreviation + Group Name + Number**. The manifest still
+  includes the raw `graphic_id` column regardless of the selected artboard name
+  format.
+
+All four options are enabled by default.
+
+### Project Export Folder
+
+**Export Active** and **Export All** ask for a parent folder, then create a new
+project export folder:
+
+```text
+Project_Graphics_Export/
+  SVG/
+  Illustrator/
+  Metadata/
+  Exports/
+  Logs/
+```
+
+If `Project_Graphics_Export` already exists, the add-on creates the next
+available numbered folder, such as `Project_Graphics_Export_001`.
+
+Each exported Print Group writes one SVG to `SVG/` and, when enabled, one
+matching Illustrator artboard script to `Illustrator/`. The export writes one
+combined manifest and one metadata JSON file to:
+
+```text
+Metadata/Project_manifest.csv
+Metadata/bematrix_export.json
+```
+
+For **Export Active**, the combined manifest contains that one group. For
+**Export All**, it contains all successfully exported groups. Groups that fail
+validation are skipped and reported in the console instead of stopping the whole
+batch export.
+
+The `Exports/` folder is created as the recommended destination for artwork
+images exported from Illustrator. `Logs/` is reserved for external workflow
+logs.
+
+### Export Metadata JSON
+
+The Blender add-on writes metadata for the separate Illustrator Script Panel to:
+
+```text
+Metadata/bematrix_export.json
+```
+
+The JSON starts with `formatVersion: 1` and treats Blender as the source of
+truth for exported Print Groups. It includes project/export-level information
+such as project name, export date/time, export scope, resolved export modes,
+Blender file name when the `.blend` has been saved, scene unit settings, add-on
+version, and relative folder names.
+
+It also includes one `printGroups` entry per exported or skipped Print Group
+with fields such as:
+
+```text
+printGroupName
+displayName
+svgFilename
+svgRelativePath
+jsxFilename
+jsxRelativePath
+exportStatus
+exportModeSetting
+exportModeResolved
+wallSegmentNames
+panelCount
+missingPlaneCount
+invalidPlaneCount
+widthIn
+heightIn
+notes
+```
+
+Fields that are not available for a group are written as `null`, empty arrays,
+or omitted only where the format does not need the field. Illustrator should use
+this file instead of guessing group names, SVG paths, or panel counts from
+filenames.
+
+### Illustrator SVG Structure
+
+Exported SVG files are organized into readable groups so Illustrator opens them
+with selectable sections:
+
+```text
+print_group_title
+panel_rectangles
+artboard_guides
+panel_labels
+```
+
+Panel rectangles remain normal editable SVG `<rect>` elements. Artboard Guides
+are separate dashed rectangles with ids such as `artboard_BW01` when Graphic IDs
+exist, falling back to names such as `artboard_Back_Wall_01` for older groups.
+They are intended to make it easier to create matching Illustrator artboards
+from the exported panel positions. They do not change the Blender panel geometry
+or validation; they are drawn at the selected template scale. The generated JSX
+script is now the preferred way to create and name Illustrator artboards.
+Automatic artwork export, PDF export, bleed, crop marks, and safe lines are not
+part of this phase.
+
+### Illustrator Artboard Setup
+
+For Print Group folder exports, the preferred Illustrator workflow is:
+
+1. In Blender, run **Export Active** or **Export All**.
+2. Open the generated SVG in Illustrator.
+3. In Illustrator, choose **File > Scripts > Other Script**.
+4. Select the matching `*_artboards.jsx` file from the `Illustrator/` folder.
+5. Confirm the artboards use the selected **Artboard Naming** format.
+6. Export artboards from Illustrator as PNG/JPG using artboard names.
+
+The generated JSX uses the currently open Illustrator document. It creates one
+artboard per exported panel using the same template-scale inch coordinates as
+the SVG, converted to Illustrator points (`1 in = 72 pt`). It anchors those
+artboards to the current document's first artboard instead of assuming document
+origin `0,0`. It names each artboard from the panel's Graphic ID when available.
+The script reuses the initial Illustrator artboard for the first valid panel
+where possible, then adds the remaining named panel artboards. It validates each
+rectangle before creating an artboard and reports skipped invalid rows with
+left/top/right/bottom and width/height debug values.
+
+The companion manifest CSV is written with one row per panel:
+
+```text
+svg_file,jsx_file,print_group_abbr,print_group_name,export_mode_setting,export_mode_resolved,graphic_id,artboard_name,blender_object_name,real_width_in,real_height_in,template_width_in,template_height_in,real_x_in,real_y_in,template_x_in,template_y_in,template_scale
+SVG/LWT_L_Wall_Test.svg,Illustrator/LWT_L_Wall_Test_artboards.jsx,LWT,L Wall Test,Auto Detect,Unfold Connected Walls,LWT01,LWT_L_Wall_Test_01,BM_PANEL_FRONT_B62 0992 1984_A001,38.80,77.83,3.88,7.78,0.25,0.90,0.25,0.90,0.10
+```
+
+The manifest is written once per project export at
+`Metadata/Project_manifest.csv`, not once per SVG.
+
+### Artwork Images
+
+After exporting Illustrator artboards as images, use **Artwork Images > Apply
+Artwork From Folder** to assign those files back onto the matching generated
+graphic planes in Blender.
+
+Recommended workflow:
+
+1. Export the Print Group project folder from Blender.
+2. Open the SVG in Illustrator and run the generated `*_artboards.jsx`.
+3. Export artboards as images into the project `Exports/` folder, keeping
+   filenames that contain either the Graphic ID or the artboard name:
+
+   ```text
+   LWT01.png
+   LWT_L_Wall_Test_01.png
+   LWT_L_Wall_Test_01_final.png
+   ```
+
+4. In Blender, expand **Print Layout Export > Artwork Images**.
+5. Leave **Apply to Active Group Only** enabled to limit matching to the active
+   Print Group, or disable it to scan all Print Groups.
+6. Click **Apply Artwork From Folder** and choose the image folder.
+
+Matching is case-insensitive. A filename may match either `bm_graphic_id` or the
+generated `bm_artboard_name`. If no image is found for a panel, it is reported
+as missing. If multiple images match one panel, or one image appears to match
+multiple panels, the add-on reports a duplicate conflict and does not apply that
+image automatically.
+
+For each match, the add-on creates or updates a material named like
+`MAT_ART_LWT01`, loads/reuses the image, connects it to a Principled BSDF base
+color, and assigns it to the graphic plane.
+
+Before assigning the material, the add-on checks the target plane's UV map. If
+the UV map is missing, empty, or collapsed, it creates/repairs a simple
+rectangular 0-1 UV layout so the artwork fills the panel:
+
+```text
+bottom-left  = 0,0
+bottom-right = 1,0
+top-right    = 1,1
+top-left     = 0,1
+```
+
+Valid existing UVs are preserved. Mesh geometry is not moved, resized, or
+unwrapped beyond assigning UV coordinates. Re-running **Apply Artwork From
+Folder** reuses the artwork material and does not create duplicate UV maps when
+the existing UVs are valid.
+
+This phase does not add automatic Illustrator image export, automatic file
+renaming, PDF export, bleed, crop marks, safe lines, or callout materials.
+
 ### Export Mode
 
-**Straight Wall** is the default and safest mode. It preserves the Phase 4
-straight-wall behavior: all exported planes must be rectangular, approximately
-coplanar, and compatible with the chosen **Straight Wall Direction**.
+Each Print Group stores its own **Export Mode**:
 
-**Unfold Connected Walls** supports a simple connected two-segment corner group,
-such as one World X wall segment meeting one perpendicular World Y wall segment.
-The export lays the segments into one flat horizontal SVG: World X first, then
-World Y, with panels inside each segment sorted by their world position along
-that segment. Real spacing and gaps inside each segment are preserved, and the
-second segment starts immediately after the first in the unfolded layout.
+* **Auto Detect** is the default for new Print Groups. During validation and
+  export, the add-on first tries the straight-wall layout. If that does not
+  validate, it tries the simple two-segment L-wall unfold. If neither geometry
+  type validates, the group reports an error and **Export All** skips that group
+  while continuing with the others.
+* **Straight Wall** preserves the Phase 4 straight-wall behavior: all exported
+  planes must be rectangular, approximately coplanar, and compatible with the
+  hidden straight-wall direction setting.
+* **Unfold Connected Walls** requires a simple connected two-segment corner
+  group, such as one World X wall segment meeting one perpendicular World Y wall
+  segment.
+
+Unfold export lays the segments into one flat horizontal SVG: World X first,
+then World Y, with panels inside each segment sorted by their world position
+along that segment. Real spacing and gaps inside each segment are preserved. The
+real world corner/endcap/post gap between the two segments is also preserved, so
+the second segment starts after the first segment plus the measured corner gap.
+
+For example, if the model has a 62 mm BeMatrix corner/endcap condition between
+the back wall graphics and the right wall graphics, the unfolded SVG includes
+that real-world spacing between the two wall runs instead of collapsing the
+segments together.
 
 Unfold mode is intentionally limited in this phase. It does not support complex
 U-shapes, multiple corners, curved walls, angled/non-axis-aligned walls, manual
 drag-and-drop ordering, bleed, crop marks, safe lines, PDF export, Illustrator
-automation, artboard creation, or re-import/apply-art workflows.
+artwork export automation, or re-import/apply-art workflows.
 
 ### Straight Wall Direction
 
-The **Straight Wall Direction** setting controls which world axis becomes the
-left-to-right direction in the SVG when **Export Mode** is **Straight Wall**:
+The straight-wall direction is currently kept as an internal/global setting and
+defaults to **Auto Detect**. It controls which world axis becomes the
+left-to-right direction in the SVG when a Print Group resolves to
+**Straight Wall**:
 
 * **Auto Detect** — compares the group's world-space X and Y spread and uses the
   larger spread as the wall direction. If the spread is ambiguous, it falls back
@@ -699,32 +971,92 @@ exportable.
 
 Print Groups let you save selected generated plane objects as a named export set
 so you can export the same layout later without manually reselecting the panels.
+Each Print Group can also have a short **Group Abbreviation**. The abbreviation
+is the stable production code that links Blender objects, SVG files, Illustrator
+artboards, future callouts, schedules, and future artwork re-import.
+
+Each Print Group also stores its own export mode. New groups default to
+**Auto Detect**, and existing saved groups continue to work with that default
+unless you choose **Straight Wall** or **Unfold Connected Walls** in the Active
+Group fields.
+
+Recommended abbreviations use uppercase letters and numbers only:
+
+```text
+BW  - Back Wall
+RW  - Right Wall
+LW  - Left Wall
+CF  - Counter Front
+HS  - Header SEG
+EC  - Endcaps
+SEG1 - SEG Run 1
+```
+
+When Graphic IDs are generated, each panel in the group receives a two-digit ID:
+
+```text
+BW - Back Wall -> BW01, BW02, BW03
+RW - Right Wall -> RW01, RW02
+CF - Counter Front -> CF01
+```
+
+The IDs are stored on the generated panel objects as custom properties:
+
+```text
+bm_graphic_id
+bm_print_group_abbr
+bm_print_group_name
+```
+
+Blender object names are not changed automatically.
+
 Group export is folder-based: the add-on creates the SVG filename from the Print
-Group name, for example `Back Wall` exports as `Back_Wall.svg`.
+Group abbreviation and name when possible. For example, `BW - Back Wall` exports
+as `BW_Back_Wall.svg`. Older Print Groups without abbreviations fall back to the
+previous filename behavior, such as `Back_Wall.svg`.
 
 To create and use a Print Group:
 
 1. Select the generated hard-panel or SEG plane objects.
-2. Enter a **Group Name**.
+2. Enter a **Group Name**. The add-on suggests a Group Abbreviation from it.
 3. Click **Create Print Group From Selected**.
 4. Choose that group in **Active Print Group**.
-5. Use **Select Group Objects** to reselect the saved planes.
-6. Click **Export Active Group to Folder** and choose an output folder.
+5. Edit the active group's **Group Name**, **Group Abbreviation**, or
+   **Export Mode** if needed.
+6. Click **Generate IDs**.
+7. Use **Select Objects** to reselect the saved planes.
+8. Click **Export Active** and choose an output folder.
 
-To export every saved group at once, click **Export All Groups to Folder** and
-choose an output folder. The add-on writes one SVG per valid Print Group:
+Existing groups can be edited in the Active Group fields. Use **Generate IDs**
+after editing abbreviations or group membership so object metadata, SVG labels,
+and artboard guide IDs stay aligned.
+
+To export every saved group at once, click **Export All** and choose a parent
+folder. The add-on creates a project export folder and writes one SVG per valid
+Print Group:
 
 ```text
-Back_Wall.svg
-Left_Wall.svg
-Right_Wall.svg
-Counter_Front.svg
+Project_Graphics_Export/
+  SVG/
+    Back_Wall.svg
+    Left_Wall.svg
+    Right_Wall.svg
+    Counter_Front.svg
+  Illustrator/
+    Back_Wall_artboards.jsx
+    Left_Wall_artboards.jsx
+    Right_Wall_artboards.jsx
+    Counter_Front_artboards.jsx
+  Metadata/
+    Project_manifest.csv
+    bematrix_export.json
+  Exports/
+  Logs/
 ```
 
 Filenames are sanitized for Windows/macOS compatibility: spaces become
 underscores, invalid filename characters are replaced, and readable names are
-preserved where possible. Existing SVG files with the same generated name are
-overwritten.
+preserved where possible.
 
 The add-on stores object names in scene data and also creates a matching
 `BM_PRINT_<Group Name>` collection for Outliner visibility. Objects are linked
@@ -740,10 +1072,12 @@ geometry, dimensions, or real spacing.
 
 ### Phase 3 / 4 Validation
 
-Before exporting production SVGs, use **Validate Active Group** or **Validate All
-Groups** in the Print Groups section. Validation checks the stored object
+Before exporting production SVGs, use **Validate Active** or **Validate All**
+in the Validation Options section. Validation checks the stored object
 references, confirms the objects still exist and are generated mesh planes, then
-uses the same world-space geometry logic as the selected **Export Mode**.
+uses the same world-space geometry logic as each Print Group's own
+**Export Mode**. **Auto Detect** reports the resolved mode when the geometry
+validates.
 
 Validation reports whether each group is OK, has warnings, or has errors. A
 typical valid result looks like:
@@ -763,7 +1097,8 @@ L Wall: OK - 5 planes, approx 196.85 in wide x 95.87 in high, Unfold Connected W
 
 If the selected planes are not valid for the chosen mode, the export is
 cancelled with a warning or error. Unfold mode also warns when it can detect a
-small corner gap between the two segments.
+small corner gap between the two segments. That reported gap is the same
+world-space measurement used in the exported SVG layout.
 
 ---
 
@@ -1098,13 +1433,13 @@ Test inside Blender after every meaningful change. Open the System Console
 * [ ] Export the unfolded corner and confirm the SVG places World X first, then World Y, as one true-size layout.
 * [ ] Confirm Unfold Connected Walls warns for a small corner gap and errors for ambiguous or unsupported geometry.
 * [ ] Create a named Print Group from selected generated planes.
-* [ ] Use Select Group Objects to reselect the saved planes.
-* [ ] Validate Active Group and confirm an OK result for a straight wall.
-* [ ] Validate All Groups and confirm OK/warning/error counts are reported.
+* [ ] Use Select Objects to reselect the saved planes.
+* [ ] Validate Active and confirm an OK result for a straight wall.
+* [ ] Validate All and confirm OK/warning/error counts are reported.
 * [ ] Delete or rename one stored object and confirm validation reports an error.
 * [ ] Add an angled/non-coplanar group and confirm validation reports an error.
-* [ ] Export Active Group to Folder and confirm the SVG filename comes from the group name.
-* [ ] Export All Groups to Folder and confirm one SVG is created per valid group.
+* [ ] Export Active and confirm the SVG filename comes from the group name.
+* [ ] Export All and confirm one SVG is created per valid group.
 * [ ] Confirm Print Group SVGs include the group name as a title above the panels.
 * [ ] Delete or rename one stored object and confirm group export warns/skips it.
 * [ ] Delete a Print Group and confirm the objects remain in the scene.

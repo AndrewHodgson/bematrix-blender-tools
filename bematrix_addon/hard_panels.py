@@ -15,6 +15,7 @@ from .utils import (
     is_marked_panel,
     generated_panel_name,
     generated_array_panel_name,
+    get_hard_panel_size_mm,
 )
 from .materials import get_or_create_unique_panel_material
 from .array_helpers import (
@@ -107,8 +108,11 @@ def create_or_update_panel_for_frame(
         "error": None,
     }
 
-    panel_width_mm = frame_width_mm - trim_mm
-    panel_height_mm = frame_height_mm - trim_mm
+    panel_width_mm, panel_height_mm = get_hard_panel_size_mm(
+        frame_width_mm,
+        frame_height_mm,
+        fallback_trim_mm=trim_mm,
+    )
 
     if panel_width_mm <= 0 or panel_height_mm <= 0:
         details["error"] = f"Invalid panel size for {frame_obj.name}"
