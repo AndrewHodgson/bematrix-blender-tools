@@ -277,6 +277,21 @@ class BEMATRIX_OT_AddGraphicPanels(bpy.types.Operator):
                         f"direction={details['arc_direction']}, "
                         f"fit_score={details['arc_fit_score']:.6f}"
                     )
+                    exp_rot = details["expected_rotation"]
+                    print(
+                        f"      axis: {details['vertical_axis']} vertical | "
+                        f"radii outer={details['arc_outer_radius_m']:.4f} "
+                        f"inner={details['arc_inner_radius_m']:.4f} m | "
+                        f"sweep={details['arc_sweep_degrees']:.2f} deg "
+                        f"({details['arc_sweep_source']}, nominal "
+                        f"{details['arc_nominal_angle_degrees']:g}) | "
+                        f"expected rotation (manual-plane rule)="
+                        f"({exp_rot[0]:.3f}, {exp_rot[1]:.3f}, {exp_rot[2]:.3f}) "
+                        f"deg, generated rotation=(0, 0, 0) baked"
+                    )
+                    print(
+                        f"      reference object used: {details.get('reference_curve_object') or 'none (frame-fit fallback)'}"
+                    )
                     print(
                         f"      first vertex={tuple(round(v, 4) for v in details['first_vertex'])}, "
                         f"last vertex={tuple(round(v, 4) for v in details['last_vertex'])}"
@@ -432,6 +447,21 @@ class BEMATRIX_OT_AddGraphicPanels(bpy.types.Operator):
                     f"direction={details['arc_direction']}, "
                     f"fit_score={details['arc_fit_score']:.6f}"
                 )
+                exp_rot = details["expected_rotation"]
+                print(
+                    f"      axis: {details['vertical_axis']} vertical | "
+                    f"radii outer={details['arc_outer_radius_m']:.4f} "
+                    f"inner={details['arc_inner_radius_m']:.4f} m | "
+                    f"sweep={details['arc_sweep_degrees']:.2f} deg "
+                    f"({details['arc_sweep_source']}, nominal "
+                    f"{details['arc_nominal_angle_degrees']:g}) | "
+                    f"expected rotation (manual-plane rule)="
+                    f"({exp_rot[0]:.3f}, {exp_rot[1]:.3f}, {exp_rot[2]:.3f}) "
+                    f"deg, generated rotation=(0, 0, 0) baked"
+                )
+                print(
+                    f"      reference object used: {details.get('reference_curve_object') or 'none (frame-fit fallback)'}"
+                )
                 print(
                     f"      first vertex={tuple(round(v, 4) for v in details['first_vertex'])}, "
                     f"last vertex={tuple(round(v, 4) for v in details['last_vertex'])}"
@@ -487,10 +517,17 @@ PRINT_EXPORT_MODE_LABELS = {
     "AUTO": "Auto Detect",
     "STRAIGHT": "Straight Wall",
     "UNFOLD": "Unfold Connected Walls",
+    "CURVED_FLAT": "Curved Flat Rectangle",
 }
 UNFOLD_AXIS_TOLERANCE_DOT = math.cos(math.radians(10.0))
 UNFOLD_CORNER_WARNING_M = 0.025
 UNFOLD_CORNER_MAX_GAP_M = 0.25
+CURVED_0248_ASSET_TOKEN = "B62_0248_CURVE_90_H0992"
+CURVED_0248_EXPECTED_IN = {
+    "INSIDE": {"width": 12.50, "height": 38.74},
+    "OUTSIDE": {"width": 16.08, "height": 38.74},
+}
+CURVED_EXPORT_WARNING_TOLERANCE_IN = 0.05
 
 
 def meters_to_inches(value_m):
@@ -839,6 +876,208 @@ def _layout_axes_for_plane(normal, resolved_direction):
     return _orient_axis_positive(horizontal), _orient_axis_positive(vertical), None
 
 
+def _is_supported_curved_0248_export_panel(obj):
+    """Only the first verified curved infill family is enabled for SVG export."""
+    if obj is None or obj.type != "MESH":
+        return False
+    if obj.get("bematrix_panel_kind") != "HARD_CURVED":
+        return False
+    if int(obj.get("bematrix_curved_family_mm", 0) or 0) == 248:
+        return True
+
+    names = [obj.name]
+    parent_name = str(obj.get("bematrix_parent_frame", "") or "")
+    if parent_name:
+        names.append(parent_name)
+    if obj.parent is not None:
+        names.append(obj.parent.name)
+    return any(CURVED_0248_ASSET_TOKEN in name for name in names)
+
+
+def _curved_export_face(obj):
+    face = str(obj.get("bematrix_curved_face", "") or "").upper()
+    if face in {"INSIDE", "OUTSIDE"}:
+        return face
+    side = str(obj.get("bematrix_panel_side", "") or "").upper()
+    if side == "BACK":
+        return "INSIDE"
+    return "OUTSIDE"
+
+
+def _measure_curved_developed_mesh(obj):
+    """
+    Measure a generated curved infill as a developed rectangle.
+
+    The generated curved mesh owns the production UV orientation: U follows the
+    curve left-to-right and V runs bottom-to-top. Use that UV order to measure
+    the actual 3D bottom/top polylines in world space.
+    """
+    mesh = obj.data
+    uv_layer = mesh.uv_layers.active if mesh else None
+    if uv_layer is None or not mesh.polygons:
+        return None, f"'{obj.name}' has no usable UV map for curved export."
+
+    samples = []
+    for poly in mesh.polygons:
+        for loop_index in poly.loop_indices:
+            vertex_index = mesh.loops[loop_index].vertex_index
+            uv = uv_layer.data[loop_index].uv
+            point = obj.matrix_world @ mesh.vertices[vertex_index].co
+            samples.append((float(uv.x), float(uv.y), point))
+
+    if not samples:
+        return None, f"'{obj.name}' has no UV samples for curved export."
+
+    min_v = min(sample[1] for sample in samples)
+    max_v = max(sample[1] for sample in samples)
+    span_v = max_v - min_v
+    if span_v <= 1e-6:
+        return None, f"'{obj.name}' has collapsed V coordinates; cannot measure height."
+
+    v_tol = max(1e-5, span_v * 0.10)
+    bottom = [(u, p) for u, v, p in samples if abs(v - min_v) <= v_tol]
+    top = [(u, p) for u, v, p in samples if abs(v - max_v) <= v_tol]
+    if len(bottom) < 2 or len(top) < 2:
+        return None, f"'{obj.name}' UV map does not expose bottom/top curve edges."
+
+    def ordered_average_points(edge_samples):
+        buckets = {}
+        for u, point in edge_samples:
+            key = round(u, 6)
+            bucket = buckets.setdefault(key, [])
+            bucket.append(point)
+
+        ordered = []
+        for key in sorted(buckets):
+            points = buckets[key]
+            avg = Vector((0.0, 0.0, 0.0))
+            for point in points:
+                avg += point
+            avg /= len(points)
+            ordered.append((key, avg))
+        return ordered
+
+    def polyline_length(ordered_points):
+        total = 0.0
+        for index in range(len(ordered_points) - 1):
+            total += (ordered_points[index + 1][1] - ordered_points[index][1]).length
+        return total
+
+    bottom_ordered = ordered_average_points(bottom)
+    top_ordered = ordered_average_points(top)
+    if len(bottom_ordered) < 2 or len(top_ordered) < 2:
+        return None, f"'{obj.name}' has too few curve stations for developed measurement."
+
+    bottom_width_m = polyline_length(bottom_ordered)
+    top_width_m = polyline_length(top_ordered)
+    width_m = (bottom_width_m + top_width_m) / 2.0
+
+    top_by_u = {u: point for u, point in top_ordered}
+    heights = []
+    for u, bottom_point in bottom_ordered:
+        top_point = top_by_u.get(u)
+        if top_point is not None:
+            heights.append((top_point - bottom_point).length)
+    if not heights:
+        height_m = max(
+            (top_point - bottom_point).length
+            for _bu, bottom_point in bottom_ordered
+            for _tu, top_point in top_ordered
+        )
+    else:
+        height_m = sum(heights) / len(heights)
+
+    if width_m <= 1e-6 or height_m <= 1e-6:
+        return None, f"'{obj.name}' measured as zero-width or zero-height."
+
+    face = _curved_export_face(obj)
+    expected = CURVED_0248_EXPECTED_IN.get(face, CURVED_0248_EXPECTED_IN["OUTSIDE"])
+    width_in = meters_to_inches(width_m)
+    height_in = meters_to_inches(height_m)
+    width_diff_in = width_in - expected["width"]
+    height_diff_in = height_in - expected["height"]
+
+    return {
+        "width_m": width_m,
+        "height_m": height_m,
+        "width_in": width_in,
+        "height_in": height_in,
+        "bottom_width_m": bottom_width_m,
+        "top_width_m": top_width_m,
+        "face": face,
+        "expected_width_in": expected["width"],
+        "expected_height_in": expected["height"],
+        "width_diff_in": width_diff_in,
+        "height_diff_in": height_diff_in,
+        "station_count": min(len(bottom_ordered), len(top_ordered)),
+    }, None
+
+
+def _collect_curved_0248_export_data(candidates):
+    export_items = []
+    warnings = []
+    offset_u = 0.0
+    gap_m = 0.02
+
+    for obj in sorted(candidates, key=lambda item: item.name):
+        measured, error = _measure_curved_developed_mesh(obj)
+        if error:
+            return None, error, None
+
+        warning = None
+        if (
+            abs(measured["width_diff_in"]) > CURVED_EXPORT_WARNING_TOLERANCE_IN
+            or abs(measured["height_diff_in"]) > CURVED_EXPORT_WARNING_TOLERANCE_IN
+        ):
+            warning = (
+                f"{obj.name}: measured {measured['width_in']:.3f} x "
+                f"{measured['height_in']:.3f} in, expected "
+                f"{measured['expected_width_in']:.3f} x "
+                f"{measured['expected_height_in']:.3f} in "
+                f"(diff {measured['width_diff_in']:+.3f}, "
+                f"{measured['height_diff_in']:+.3f} in)"
+            )
+            warnings.append(warning)
+
+        obj["bematrix_curved_developed_width_in"] = measured["width_in"]
+        obj["bematrix_curved_developed_height_in"] = measured["height_in"]
+        obj["bematrix_curved_svg_expected_width_in"] = measured["expected_width_in"]
+        obj["bematrix_curved_svg_expected_height_in"] = measured["expected_height_in"]
+
+        export_items.append({
+            "object": obj,
+            "center_x": offset_u + measured["width_m"] / 2.0,
+            "center_u": offset_u + measured["width_m"] / 2.0,
+            "min_u": offset_u,
+            "max_u": offset_u + measured["width_m"],
+            "min_v": 0.0,
+            "max_v": measured["height_m"],
+            "width_in": measured["width_in"],
+            "height_in": measured["height_in"],
+            "width_m": measured["width_m"],
+            "height_m": measured["height_m"],
+            "width_source": "curved_mesh_developed_uv",
+            "expected_width_mm": None,
+            "expected_height_mm": None,
+            "measured_width_in": measured["width_in"],
+            "measured_height_in": measured["height_in"],
+            "curved_export": measured,
+        })
+        offset_u += measured["width_m"] + gap_m
+
+    direction_info = {
+        "mode": "CURVED_FLAT",
+        "setting": "CURVED_FLAT",
+        "resolved": "CURVED_FLAT",
+        "warning": " ".join(warnings) if warnings else None,
+        "warnings": warnings,
+        "details": [
+            f"Curved flat rectangle export: {len(export_items)} B62_0248 panel(s)"
+        ],
+    }
+    return export_items, None, direction_info
+
+
 def _collect_export_plane_data(selected_objects, direction_setting="AUTO"):
     """
     Validate selected generated mesh planes and return projected SVG bounds.
@@ -855,6 +1094,17 @@ def _collect_export_plane_data(selected_objects, direction_setting="AUTO"):
 
     if not candidates:
         return None, "No selected generated mesh planes found.", None
+
+    curved_candidates = [
+        obj for obj in candidates if _is_supported_curved_0248_export_panel(obj)
+    ]
+    if curved_candidates:
+        if len(curved_candidates) != len(candidates):
+            return None, (
+                "B62_0248 curved SVG export currently supports curved panels "
+                "by themselves, not mixed with straight panels."
+            ), None
+        return _collect_curved_0248_export_data(curved_candidates)
 
     plane_data = []
     all_world_points = []
@@ -1385,8 +1635,9 @@ def _resolve_export_items_for_mode(objects, direction_setting="AUTO", export_mod
     if not straight_error:
         if straight_info is None:
             straight_info = {}
-        straight_info["auto_resolved_mode"] = "STRAIGHT"
-        return "STRAIGHT", straight_items, None, straight_info
+        resolved = "CURVED_FLAT" if straight_info.get("mode") == "CURVED_FLAT" else "STRAIGHT"
+        straight_info["auto_resolved_mode"] = resolved
+        return resolved, straight_items, None, straight_info
 
     unfold_items, unfold_error, unfold_info = _collect_unfold_connected_plane_data(objects)
     if not unfold_error:
@@ -1631,6 +1882,68 @@ def _write_illustrator_artboard_companions(svg_filepath, export_items, group, ex
     _write_artboard_manifest_csv(manifest_path, records)
     _write_illustrator_artboard_jsx(jsx_path, records)
     return manifest_path, jsx_path
+
+
+def _print_curved_export_debug(
+    export_items,
+    svg_path,
+    jsx_path=None,
+    records=None,
+    manifest_rows=None,
+    export_options=None,
+):
+    curved_items = [item for item in export_items if item.get("curved_export")]
+    if not curved_items:
+        return
+
+    records_by_name = {
+        record["blender_object_name"]: record
+        for record in (records or [])
+    }
+    manifest_by_name = {
+        row["blender_object_name"]: row
+        for row in (manifest_rows or [])
+    }
+    template_scale = (
+        export_options or _svg_export_options()
+    )["illustrator_template_scale"]
+
+    print("\n=== BeMatrix Curved SVG Export Debug ===")
+    for item in curved_items:
+        obj = item["object"]
+        measured = item["curved_export"]
+        record = records_by_name.get(obj.name)
+        manifest = manifest_by_name.get(obj.name)
+        print(f"  object name: {obj.name}")
+        print(f"  detected curved panel: {CURVED_0248_ASSET_TOKEN} ({measured['face'].title()} Panel)")
+        print(f"  measured developed width: {measured['width_in']:.6f} in")
+        print(f"  measured panel height: {measured['height_in']:.6f} in")
+        print(f"  expected width: {measured['expected_width_in']:.6f} in")
+        print(f"  expected height: {measured['expected_height_in']:.6f} in")
+        print(f"  width difference: {measured['width_diff_in']:+.6f} in")
+        print(f"  height difference: {measured['height_diff_in']:+.6f} in")
+        print(f"  SVG width: {item['width_in']:.6f} in")
+        print(f"  SVG height: {item['height_in']:.6f} in")
+        print(f"  template scale: {template_scale:.6f} ({_template_scale_label(template_scale)})")
+        if record:
+            print(
+                "  manifest values: "
+                f"real={record['real_width_in']:.6f} x {record['real_height_in']:.6f} in, "
+                f"template={record['template_width_in']:.6f} x "
+                f"{record['template_height_in']:.6f} in, "
+                f"artboard={record['artboard_name']}"
+            )
+        elif manifest:
+            print(
+                "  manifest values: "
+                f"real={manifest['real_width_in']} x {manifest['real_height_in']} in, "
+                f"template={manifest['template_width_in']} x "
+                f"{manifest['template_height_in']} in"
+            )
+        else:
+            print("  manifest values: not written for this export action")
+        print(f"  SVG output path: {svg_path}")
+        print(f"  JSX output path: {jsx_path or '(not generated)'}")
 
 
 SUPPORTED_ARTWORK_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}
@@ -1989,6 +2302,7 @@ def export_planes_to_svg(
     if not filepath.lower().endswith(".svg"):
         filepath += ".svg"
 
+    export_options = export_options or _svg_export_options()
     svg_text = _svg_for_export_items(
         export_items,
         print_group_name=print_group_name,
@@ -2000,6 +2314,21 @@ def export_planes_to_svg(
             svg_file.write(svg_text)
     except OSError as exc:
         return 0, f"Unable to write SVG: {exc}", direction_info
+
+    records = _layout_records_for_export_items(
+        export_items,
+        print_group_name=print_group_name or "Selected Planes",
+        print_group_abbr="",
+        export_options=export_options,
+    )
+    _print_curved_export_debug(
+        export_items,
+        filepath,
+        jsx_path=None,
+        records=records,
+        manifest_rows=None,
+        export_options=export_options,
+    )
 
     return len(export_items), None, direction_info
 
@@ -2099,6 +2428,8 @@ def _summarize_export_items(export_items):
 def _direction_summary(direction_info):
     if not direction_info:
         return "direction unknown"
+    if direction_info.get("mode") == "CURVED_FLAT":
+        return "curved mesh developed to flat rectangle"
     if direction_info.get("mode") == "UNFOLD":
         directions = direction_info.get("segment_directions") or []
         if directions:
@@ -2125,6 +2456,8 @@ def _export_info_warning(direction_info):
 
 
 def _export_info_report_label(direction_info, export_mode):
+    if direction_info and direction_info.get("mode") == "CURVED_FLAT":
+        return _print_export_mode_label("CURVED_FLAT")
     if export_mode == "AUTO" and direction_info:
         resolved_mode = direction_info.get("auto_resolved_mode")
         if resolved_mode:
@@ -2931,6 +3264,15 @@ def _export_print_group_to_folder(
                 "template_scale": f"{record['template_scale']:.6f}",
             }
             manifest_rows.append(row)
+
+        _print_curved_export_debug(
+            export_items,
+            filepath,
+            jsx_path=jsx_path if script_written else None,
+            records=records,
+            manifest_rows=manifest_rows,
+            export_options=export_options,
+        )
     except OSError as exc:
         return {
             "ok": False,

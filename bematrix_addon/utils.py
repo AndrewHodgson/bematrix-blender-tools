@@ -16,7 +16,7 @@ from mathutils import Vector
 # Human-readable add-on version. Bump this on every meaningful change so the
 # version shown in the sidebar and printed to the console proves Blender loaded
 # the latest file (Blender caches enabled add-ons aggressively).
-ADDON_VERSION = "0.8.6-curved-arc-fit"
+ADDON_VERSION = "0.9.1-curved-0248-svg"
 
 
 # Common BeMatrix frame dimensions from your chart.
